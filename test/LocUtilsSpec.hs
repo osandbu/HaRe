@@ -24,7 +24,9 @@ import Control.Monad.State
 import Data.Maybe
 import Language.Haskell.Refact.Utils
 import Language.Haskell.Refact.Utils.Monad
+import Language.Haskell.Refact.Utils.MonadUtils
 import Language.Haskell.Refact.Utils.LocUtils
+import Language.Haskell.Refact.Utils.TokenUtils
 import Language.Haskell.Refact.Utils.TypeSyn
 import Language.Haskell.Refact.Utils.TypeUtils
 
@@ -131,6 +133,57 @@ spec = do
 
       (show $ getStartEndLoc sqSig) `shouldBe` "((13,1),(13,24))"
       (show   (startPos,endPos)) `shouldBe` "((13,1),(13,24))"
+
+    -- -----------------------------------------------------------------
+
+    it "get start&end loc, including leading comments which belong 2" $ do
+      (t, toks) <- parsedFileTokenTestGhc
+      let renamed = fromJust $ GHC.tm_renamed_source t
+
+      let declsr = hsBinds renamed
+
+      let Just (GHC.L _ sq) = locToName tokenTestFileName (19, 1) renamed
+
+      let decls = filter isFunOrPatBindR declsr
+
+      let decl = head decls
+      let (startPos,endPos) = startEndLocIncComments toks decl
+
+      -- (GHC.showPpr decls) `shouldBe` ""
+      (GHC.showPpr decl) `shouldBe` "TokenTest.foo x y\n  = do { c <- System.IO.getChar;\n         GHC.Base.return c }"
+
+      (showToks $ getToks ((14,1),(26,1)) toks) `shouldBe` 
+             ("[(((14,3),(14,6)),ITlet,\"let\"),"++
+             "(((14,7),(14,7)),ITvocurly,\"\"),"++
+             "(((14,7),(14,10)),ITvarid \"bar\",\"bar\"),"++
+             "(((14,11),(14,12)),ITequal,\"=\"),"++
+             "(((14,13),(14,14)),ITinteger 3,\"3\"),"++
+             "(((15,3),(15,3)),ITvccurly,\"\"),"++
+             "(((15,3),(15,5)),ITin,\"in\"),"++
+             "(((15,10),(15,11)),ITvarid \"b\",\"b\"),"++
+             "(((15,12),(15,13)),ITvarsym \"+\",\"+\"),"++
+             "(((15,14),(15,17)),ITvarid \"bar\",\"bar\"),"++
+             "(((15,18),(15,38)),ITlineComment \"-- ^trailing comment\",\"-- ^trailing comment\"),"++
+             "(((18,1),(18,19)),ITlineComment \"-- leading comment\",\"-- leading comment\"),"++
+             "(((19,1),(19,1)),ITsemi,\"\"),"++
+             "(((19,1),(19,4)),ITvarid \"foo\",\"foo\"),"++
+             "(((19,5),(19,6)),ITvarid \"x\",\"x\"),"++
+             "(((19,7),(19,8)),ITvarid \"y\",\"y\"),"++
+             "(((19,9),(19,10)),ITequal,\"=\"),"++
+             "(((20,3),(20,5)),ITdo,\"do\"),"++
+             "(((20,6),(20,6)),ITvocurly,\"\"),"++
+             "(((20,6),(20,7)),ITvarid \"c\",\"c\"),"++
+             "(((20,8),(20,10)),ITlarrow,\"<-\"),"++
+             "(((20,11),(20,18)),ITvarid \"getChar\",\"getChar\"),"++
+             "(((21,6),(21,6)),ITsemi,\"\"),"++
+             "(((21,6),(21,12)),ITvarid \"return\",\"return\"),"++
+             "(((21,13),(21,14)),ITvarid \"c\",\"c\"),"++
+             "(((26,1),(26,1)),ITvccurly,\"\"),"++
+             "(((26,1),(26,1)),ITsemi,\"\")]")
+
+
+      (show $ getStartEndLoc decl) `shouldBe` "((19,1),(21,14))"
+      (show   (startPos,endPos)) `shouldBe` "((18,1),(21,14))"
 
   -- -------------------------------------------------------------------
 
@@ -281,6 +334,14 @@ spec = do
               ++"(((13,14),(13,15)),ITvarid \"c\",\"c\")]"
 
       (GHC.showRichTokenStream middle) `shouldBe` "\n\n\n\n\n\n\n\n\n\n\n\n          a b c"
+
+    -- ---------------------------------------------
+
+    it "Split the tokens into a front, middle and end, for a single token" $ do
+      (t,toks) <- parsedFileWhereIn6Ghc
+
+      let (_front,middle,_back) = splitToks ((13,10),(13,10)) toks
+      (showToks middle) `shouldBe` "[(((13,10),(13,11)),ITvarid \"a\",\"a\")]"
 
   -- -------------------------------------------------------------------
 
@@ -702,6 +763,18 @@ spec = do
       (_t,toks) <- parsedFileOffsetGhc
       getIndentOffset toks (19,1) `shouldBe` 5
 
+    -- ---------------------------------
+
+    it "Gets a sane indent for empty tokens" $ do
+      (_t,toks) <- parsedFileOffsetGhc
+      getIndentOffset [] (19,1) `shouldBe` 1
+
+    -- ---------------------------------
+
+    it "Gets a sane indent for (0,0)" $ do
+      (_t,toks) <- parsedFileOffsetGhc
+      getIndentOffset toks (0,0) `shouldBe` 1
+
   -- -------------------------------------------------------------------
 
   describe "foo" $ do
@@ -796,6 +869,14 @@ parsedFileWhereIn3Ghc = parsedFileGhc "./test/testdata/Demote/WhereIn3.hs"
 
 whereIn3FileName :: GHC.FastString
 whereIn3FileName = GHC.mkFastString "./test/testdata/Demote/WhereIn3.hs"
+
+-- -----------
+
+tokenTestFileName :: GHC.FastString
+tokenTestFileName = GHC.mkFastString "./test/testdata/TokenTest.hs"
+
+parsedFileTokenTestGhc :: IO (ParseResult,[PosToken])
+parsedFileTokenTestGhc = parsedFileGhc "./test/testdata/TokenTest.hs"
 
 -- -----------
 
