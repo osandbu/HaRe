@@ -11,6 +11,7 @@
 
 module Language.Haskell.Refact.Utils.TokenUtils(
        Entry(..)
+       , Positioning(..)
        , Module(..)
        , initModule
        , getTokensFor
@@ -20,13 +21,17 @@ module Language.Haskell.Refact.Utils.TokenUtils(
        , getSrcSpanFor
        , getPathFor
        , retrieveTokens
-
        , addNewSrcSpanAndToksAfter
        , addToksAfterSrcSpan
 
+       -- * Token marking and re-alignment
+       , tokenFileMark
+       , markToken
+       , isMarked
+       , reAlignMarked
+
        -- * Utility
        , posToSrcSpan
-
 
        -- * AST tie up
        , syncAST
@@ -75,6 +80,7 @@ module Language.Haskell.Refact.Utils.TokenUtils(
        , splitToks
        , emptyList, nonEmptyList
        , startEndLocIncComments, startEndLocIncComments'
+       , divideComments
        , isComment
        , getSrcSpan
        , getIndentOffset
@@ -82,6 +88,9 @@ module Language.Haskell.Refact.Utils.TokenUtils(
        , tokenLen
        , newLnToken
        , newLinesToken
+       , groupTokensByLine
+       , reAlignToks
+       , reSequenceToks
        ) where
 
 import qualified BasicTypes    as GHC
@@ -169,6 +178,19 @@ Note : Need to
 
 deriving instance Show Entry => Show (Entry)
 
+
+-- ---------------------------------------------------------------------
+
+-- |How new SrcSpans should be inserted in the Token tree, relative to
+-- the prior span
+data Positioning = PlaceAdjacent -- ^Only a single space between the
+                   -- end of the prior span and the new one
+                 | PlaceAbsolute Int Int -- ^Start at the specified
+                   -- line and col
+                 | PlaceOffset Int Int Int -- ^Line and Col offset for
+                   -- start, num lines to add at the end
+                   -- relative to the indent level of the prior span
+
 -- ---------------------------------------------------------------------
 -- ++AZ++ TODO: will we actuall need these?
 -- | Operations on the structure
@@ -216,10 +238,10 @@ data ForestLine = ForestLine
 
 -- | Extract an encoded ForestLine from a GHC line
 ghcLineToForestLine :: Int -> ForestLine
-ghcLineToForestLine line = ForestLine v l
+ghcLineToForestLine l = ForestLine v l'
   where
-    l = mod line forestConstant
-    v = div line forestConstant
+    l' = mod l forestConstant
+    v = div l forestConstant
 
 forestLineToGhcLine :: ForestLine -> Int
 forestLineToGhcLine fl = ((flInsertVersion fl) * forestConstant) + (flLine fl)
@@ -249,7 +271,7 @@ showForestSpan ((sr,sc),(er,ec))
 -- ---------------------------------------------------------------------
 
 insertForestLineInSrcSpan :: ForestLine -> GHC.SrcSpan -> GHC.SrcSpan
-insertForestLineInSrcSpan fl@(ForestLine v l) sspan@(GHC.RealSrcSpan ss) = ss'
+insertForestLineInSrcSpan fl@(ForestLine v _l) (GHC.RealSrcSpan ss) = ss'
   where
     lineStart = forestLineToGhcLine fl
     lineEnd   = forestLineToGhcLine (ForestLine v (GHC.srcSpanEndLine ss))
@@ -274,11 +296,6 @@ data Module = Module
         , mOrigTokenStream :: [PosToken]  -- ^Original Token stream for the current module
         , mTokenCache :: Tree Entry -- ^Any modifications to the token stream.
         }
-
--- Attempt 1. Build a Rose Tree from all SrcSpans in the file.
-
-mkTree :: GHC.RenamedSource -> [PosToken] -> Forest Entry
-mkTree renamed tokens = []
 
 initModule :: GHC.TypecheckedModule -> [PosToken] -> Module
 initModule typeChecked tokens
@@ -310,10 +327,12 @@ getTokensFor modu sspan = (modu', tokens)
      tokens = retrieveTokens tree
 
 -- ---------------------------------------------------------------------
-
+{- ++AZ++ old version
 -- |Replace the tokens for a given SrcSpan with new ones. The SrcSpan
 -- will be inserted into the tree if it is not already there
-updateTokensForSrcSpan :: Tree Entry -> GHC.SrcSpan -> [PosToken] -> Tree Entry
+-- TODO: What about the change in size of thr SrcSpan? Solution is to
+-- replace the SrcSpan with a new one (marked), and return it
+updateTokensForSrcSpan :: Tree Entry -> GHC.SrcSpan -> [PosToken] -> (GHC.SrcSpan,Tree Entry)
 updateTokensForSrcSpan forest sspan toks = forest''
   where
     -- Make sure the sspan is in the tree
@@ -324,6 +343,38 @@ updateTokensForSrcSpan forest sspan toks = forest''
     -- zf' = Z.setLabel (Entry s toks) zf
     zf' = Z.setTree (Node (Entry s toks) []) zf
     forest'' = Z.toTree zf'
+-}
+
+-- |Replace the tokens for a given SrcSpan with new ones. The SrcSpan
+-- will be inserted into the tree if it is not already there
+-- TODO: What about the change in size of thr SrcSpan? Solution is to
+-- replace the SrcSpan with a new one (marked), and return it
+updateTokensForSrcSpan :: Tree Entry -> GHC.SrcSpan -> [PosToken] -> (Tree Entry,GHC.SrcSpan)
+updateTokensForSrcSpan forest sspan toks = (forest'',newSpan)
+  where
+    (forest',tree@(Node (Entry s _) _)) = getSrcSpanFor forest (srcSpanToForestSpan sspan)
+    prevToks = retrieveTokens tree
+
+    newTokStart = ghead "reIndentToks" prevToks
+
+    -- newTokStart = ghead "reIndentToks"
+    --             $ dropWhile (\tok -> isComment tok || isEmpty tok) $ prevToks
+
+    -- toks'' = reIndentToks PlaceAdjacent [newTokStart] toks
+    toks'' = reIndentToks (PlaceAbsolute (tokenRow newTokStart) (tokenCol newTokStart)) prevToks toks
+
+    (startPos,endPos) = nonCommentSpan toks''
+
+    -- TODO: should we add a version?
+    newSpan = posToSrcSpan forest (startPos,endPos)
+
+    zf = openZipperToNode tree $ Z.fromTree forest'
+
+    zf' = Z.setTree (Node (Entry (srcSpanToForestSpan newSpan) toks'') []) zf
+    forest'' = Z.toTree zf'
+
+    -- (forest'',newSpan') = addNewSrcSpanAndToksAfter forest sspan newSpan pos toks''
+
 
 -- ---------------------------------------------------------------------
 -- |Retrieve a path to the tree containing a ForestSpan from the forest,
@@ -334,7 +385,7 @@ getSrcSpanFor forest sspan = (forest',tree)
     forest' = insertSrcSpan forest sspan -- Will NO-OP if already there
     tree = case (lookupSrcSpan [forest'] sspan) of
              [x] -> x
-             xx  -> error $ "TokenUtils.getSrcSpanFor("++ (show sspan) ++ "): got " ++ (show xx)
+             xx  -> error $ "TokenUtils.getSrcSpanFor("++ (show sspan) ++ "): got " ++ (show xx) ++ " for " ++ (drawTreeEntry forest)
 
 -- ---------------------------------------------------------------------
 -- |Retrieve a path to the tree containing a SrcSpan from the forest,
@@ -398,11 +449,53 @@ insertSrcSpan forest sspan = forest'
 -- ---------------------------------------------------------------------
 
 -- |Retrieve all the tokens at the leaves of the tree, in order
+-- TODO: ++AZ++ run through the tokens and trigger re-alignment in all
+-- rows with tokenFileMark in a filename for a token
 retrieveTokens :: Tree Entry -> [PosToken]
-retrieveTokens forest = concat $ map (\t -> F.foldl accum [] t) [forest]
+retrieveTokens forest = reAlignMarked $ concat $ map (\t -> F.foldl accum [] t) [forest]
   where
     accum :: [PosToken] -> Entry -> [PosToken]
     accum acc (Entry _ toks) = acc ++ toks
+
+-- ---------------------------------------------------------------------
+
+-- |Used as a marker in the filename part of the SrcSpan on modified
+-- tokens, to trigger re-alignment when retrieving the tokens.
+tokenFileMark :: GHC.FastString
+tokenFileMark = GHC.mkFastString "HaRe"
+
+-- |Mark a token so that it can be use to trigger layout checking
+-- later when the toks are retrieved
+markToken :: PosToken -> PosToken
+markToken tok = tok'
+  where
+      (GHC.L l t,s) = tok
+      tok' = (GHC.L (GHC.RealSrcSpan l') t,s)
+
+      l' = case l of
+            GHC.RealSrcSpan ss ->
+                 GHC.mkRealSrcSpan
+                      (GHC.mkRealSrcLoc tokenFileMark (GHC.srcSpanStartLine ss)  (GHC.srcSpanStartCol ss))
+                      (GHC.mkRealSrcLoc tokenFileMark (GHC.srcSpanEndLine ss)  (GHC.srcSpanEndCol ss))
+
+            _ -> error $ "markToken: expecting a real SrcSpan, got" ++ (GHC.showPpr l)
+
+
+-- |Does a token have the file mark in it
+isMarked :: PosToken -> Bool
+isMarked (GHC.L l _,_) =
+  case l of
+    GHC.RealSrcSpan ss -> GHC.srcSpanFile ss == tokenFileMark
+    _                  -> False
+
+-- ---------------------------------------------------------------------
+
+reAlignMarked :: [PosToken] -> [PosToken]
+reAlignMarked toks = concatMap alignOne $ groupTokensByLine toks
+  where
+    alignOne toksl = unmarked ++ (reAlignToks marked)
+     where
+       (unmarked,marked) = break isMarked toksl
 
 -- ---------------------------------------------------------------------
 
@@ -413,20 +506,21 @@ addNewSrcSpanAndToksAfter ::
   Tree Entry -- ^The forest to update
   -> GHC.SrcSpan -- ^The new span comes after this one
   -> GHC.SrcSpan -- ^Existing span for the tokens
+  -> Positioning
   -> [PosToken]  -- ^The new tokens belonging to the new SrcSpan
   -> (Tree Entry -- ^Updated forest with the new span
      , GHC.SrcSpan) -- ^Unique SrcSpan allocated in the forest to
                     -- identify this span in its position
-addNewSrcSpanAndToksAfter forest oldSpan newSpan toks = (forest'',newSpan')
+addNewSrcSpanAndToksAfter forest oldSpan newSpan pos toks = (forest'',newSpan')
   where
     (forest',tree) = getSrcSpanFor forest (srcSpanToForestSpan oldSpan)
 
-    (ghcl,c) = getGhcLoc newSpan
+    (ghcl,_c) = getGhcLoc newSpan
     (ForestLine v l) = ghcLineToForestLine ghcl
     newSpan' = insertForestLineInSrcSpan (ForestLine (v+1) l) newSpan
 
     prevToks = retrieveTokens tree
-    toks' = reAlignToks prevToks toks
+    toks' = reIndentToks pos prevToks toks
 
     newNode = Node (Entry (srcSpanToForestSpan newSpan') toks') []
 
@@ -437,37 +531,63 @@ addNewSrcSpanAndToksAfter forest oldSpan newSpan toks = (forest'',newSpan')
 -- |Add new tokens after the given SrcSpan, constructing a new SrcSpan
 -- in the process
 addToksAfterSrcSpan ::
-  Tree Entry -> GHC.SrcSpan -> [PosToken]
-  -> (Tree Entry, GHC.SrcSpan)
-addToksAfterSrcSpan forest oldSpan toks = (forest',newSpan')
+  Tree Entry  -- ^TokenTree to be modified
+  -> GHC.SrcSpan -- ^Preceding location for new tokens
+  -> Positioning
+  -> [PosToken] -- ^New tokens to be added
+  -> (Tree Entry, GHC.SrcSpan) -- ^ updated TokenTree and SrcSpan location for
+                               -- the new tokens in the TokenTree
+addToksAfterSrcSpan forest oldSpan pos toks = (forest',newSpan')
   where
     (_,tree) = getSrcSpanFor forest (srcSpanToForestSpan oldSpan)
     prevToks = retrieveTokens tree
 
-    toks'' = reAlignToks prevToks toks
+    toks'' = reIndentToks pos prevToks toks
 
     (startPos,endPos) = nonCommentSpan toks''
 
     newSpan = posToSrcSpan forest (startPos,endPos)
-    (forest',newSpan') = addNewSrcSpanAndToksAfter forest oldSpan newSpan toks''
+    -- TODO: expensive reIndentToks being done twice now
+    (forest',newSpan') = addNewSrcSpanAndToksAfter forest oldSpan newSpan pos toks''
+    -- (forest',newSpan') = (error $ "addToksAfterSrcSpan:(toks'')=" ++ (showToks toks''),oldSpan)
+    -- (forest',newSpan') = (error $ "addToksAfterSrcSpan:(prevToks)=" ++ (showToks prevToks),oldSpan)
     -- (forest',newSpan') = (error $ "addToksAfterSrcSpan:(lineOffset,colOffset)=" ++ (show ((lineOffset,lineStart,tokenRow $ head toks,tokenRow $ head toks'',tokenRow newTokStart,colOffset))),oldSpan)
 
 -- ---------------------------------------------------------------------
 
-reAlignToks :: [PosToken] -> [PosToken] -> [PosToken]
-reAlignToks prevToks toks = toks''
+reIndentToks :: Positioning -> [PosToken] -> [PosToken] -> [PosToken]
+reIndentToks pos prevToks toks = toks''
   where
-    -- colStart = getIndentOffset prevToks (tokenPos $ glast "addToksAfterSrcSpan" prevToks)
-    colStart  = tokenCol $ ghead "reAlignToks" $ dropWhile (\tok -> isComment tok || isEmpty tok) $ prevToks
-    lineStart = (tokenRow (glast "reAlignToks" prevToks)) + 2
+    newTokStart = ghead "reIndentToks"
+                $ dropWhile (\tok -> isComment tok || isEmpty tok) $ toks
 
-    newTokStart = ghead "reAlignToks" $ dropWhile (\tok -> isComment tok || isEmpty tok) $ toks
-    -- lineOffset = lineStart - (tokenRow newTokStart)
-    lineOffset = lineStart - (tokenRow $ ghead "reAlignToks" toks)
-    colOffset  = colStart  - (tokenCol newTokStart)
+    (lineOffset,colOffset,endNewlines) = case pos of
+      PlaceAdjacent -> (lineOffset',colOffset',0)
+        where
+          colStart  = (tokenColEnd (glast "reIndentToks" prevToks)) + 1
+          lineStart = (tokenRow    (glast "reIndentToks" prevToks))
 
-    toks' = addOffsetToToks (lineOffset,colOffset) toks
-    toks'' = toks' ++ [(newLinesToken 2 $ glast "reAlignToks" toks')]
+          lineOffset' = lineStart - (tokenRow $ ghead "reIndentToks" toks)
+          colOffset'  = colStart  - (tokenCol newTokStart)
+
+      PlaceAbsolute row col -> (lineOffset', colOffset', 0)
+        where
+          lineOffset' = row - (tokenRow $ ghead "reIndentToks" toks)
+          colOffset'  = col - (tokenCol $ ghead "reIndentToks" toks)
+
+      PlaceOffset rowIndent colIndent numLines -> (lineOffset',colOffset',numLines)
+        where
+          colStart  = tokenCol $ ghead "reIndentToks"
+                    $ dropWhile (\tok -> isComment tok || isEmpty tok) $ prevToks
+          lineStart = (tokenRow (glast "reIndentToks" prevToks)) + 1
+
+          lineOffset' = rowIndent + lineStart - (tokenRow $ ghead "reIndentToks" toks)
+          colOffset'  = colIndent + colStart  - (tokenCol newTokStart)
+
+    toks'  = addOffsetToToks (lineOffset,colOffset) toks
+    toks'' = if endNewlines > 0
+               then toks' ++ [(newLinesToken endNewlines $ glast "reIndentToks" toks')]
+               else toks'
 
 -- ---------------------------------------------------------------------
 
@@ -489,7 +609,7 @@ nonCommentSpan toks = (startPos,endPos)
 posToSrcSpan :: Tree Entry -> (SimpPos,SimpPos) -> GHC.SrcSpan
 posToSrcSpan forest ((rs,cs),(re,ce)) = sspan
   where
-    tok@(GHC.L l _,_) = ghead "posToSrcSpan"  $ retrieveTokens forest -- ++AZ++ Ouch, performance??
+    (GHC.L l _,_) = ghead "posToSrcSpan"  $ retrieveTokens forest -- ++AZ++ Ouch, performance??
     sspan =  case l of
       GHC.RealSrcSpan ss ->
         let
@@ -569,7 +689,7 @@ openZipperToSpan sspan z
             [] -> z -- Not in subtree, this is as good as it gets
             [x] -> -- exactly one, drill down
                    openZipperToSpan sspan x
-            xs -> z -- Multiple, this is the spot
+            _xs -> z -- Multiple, this is the spot
 
           contains zn = (startPos <= nodeStart && endPos >= nodeEnd)
             where
@@ -594,13 +714,13 @@ splitForestOnSpan forest sspan = (beginTrees,middleTrees,endTrees)
     (beginTrees,rest)      = break (\t -> not $ inBeginTrees t) forest
     (middleTrees,endTrees) = break (\t ->       inEndTrees t) rest
 
-    inBeginTrees tree = spanStart > treeEnd
+    inBeginTrees tree = spanStart >= treeEnd
       where
-        (treeStart,treeEnd) = treeStartEnd tree
+        (_treeStart,treeEnd) = treeStartEnd tree
 
     inEndTrees tree = spanEnd <= treeStart
       where
-        (treeStart,treeEnd) = treeStartEnd tree
+        (treeStart,_treeEnd) = treeStartEnd tree
 
 
 
@@ -678,19 +798,19 @@ invariant forest = rsub
         r = checkNode [] tree
 
     checkNode :: [String] -> Tree Entry -> [String]
-    checkNode acc node@(Node (Entry _sspan toks) sub) = acc ++ r ++ rinc ++ rsub
+    checkNode acc node@(Node (Entry _sspan toks) sub) = acc ++ r ++ rinc ++ rsubs
       where
         r = if (   emptyList toks && nonEmptyList sub) ||
                (nonEmptyList toks &&    emptyList sub)
               then []
               else ["FAIL: exactly one of toks or subforest must be empty: " ++ (prettyshow node)]
-        rsub = foldl' checkNode [] sub
+        rsubs = foldl' checkNode [] sub
 
         rinc = checkInclusion node
 
     -- |Check invariant 2, assuming 1 ok
     checkInclusion      (Node _                    []) = []
-    checkInclusion node@(Node (Entry sspan toks)  sub) = rs ++ rseq
+    checkInclusion node@(Node (Entry _sspan _toks)  sub) = rs ++ rseq
       where
         (start,end) = treeStartEnd node
         subs = map treeStartEnd sub
@@ -706,15 +826,15 @@ invariant forest = rsub
         checkSequence :: Tree Entry -> [ForestSpan] -> [String]
         checkSequence _ [] = []
         checkSequence _ [_x] = []
-        checkSequence node ((s1,e1):s@(s2,e2):ss)
-          = r ++ checkSequence node (s:ss)
+        checkSequence node' ((_s1,e1):s@(s2,_e2):ss)
+          = r ++ checkSequence node' (s:ss)
           where
             -- r = if e1 <= s2
             r = if before e1 s2
                  then []
                  else ["FAIL: subForest not in order: " ++
                         show e1 ++ " not < " ++ show s2 ++
-                        ":" ++ prettyshow node]
+                        ":" ++ prettyshow node']
 
             before (ForestLine ve er,ec) (ForestLine vs sr,sc)
               = case (ve /= 0, vs /= 0) of
@@ -806,8 +926,8 @@ mkTreeFromTokens :: [PosToken] -> Tree Entry
 mkTreeFromTokens [] = Node (Entry nullSpan []) []
 mkTreeFromTokens toks = Node (Entry sspan toks) []
   where
-   startLoc = tokenPos $ ghead "mkTreeFromTokens" toks
-   endLoc   = tokenPosEnd $ last toks -- SrcSpans count from start of token, not end
+   -- startLoc = tokenPos $ ghead "mkTreeFromTokens" toks
+   -- endLoc   = tokenPosEnd $ last toks -- SrcSpans count from start of token, not end
    -- sspan    = GHC.RealSrcSpan $ GHC.mkRealSrcSpan startLoc endLoc
    (startLoc',endLoc') = nonCommentSpan toks
    sspan    = simpPosToForestSpan (startLoc',endLoc')
@@ -821,6 +941,7 @@ mkTreeFromSpanTokens sspan toks = Node (Entry sspan toks) []
 
 -- ---------------------------------------------------------------------
 
+ghcSpanStartEnd :: GHC.SrcSpan -> ((Int, Int), (Int, Int))
 ghcSpanStartEnd sspan = (getGhcLoc sspan,getGhcLocEnd sspan)
 
 -- ---------------------------------------------------------------------
@@ -832,7 +953,7 @@ syncAST :: (SYB.Data t)
   -> GHC.SrcSpan   -- ^The SrcSpan created in the Tree Entry
   -> Tree Entry    -- ^Existing token tree
   -> (GHC.Located t, Tree Entry) -- ^Updated AST and tokens
-syncAST ast@(GHC.L l t) sspan forest = (ast',forest')
+syncAST (GHC.L _l t) sspan forest = (ast',forest')
   where
     ast' = (GHC.L sspan t)
     forest' = forest
@@ -852,15 +973,17 @@ showToks toks = show $ map (\(t@(GHC.L _ tok),s) ->
                  ((getLocatedStart t, getLocatedEnd t),tok,s)) toks
 
 instance Show (GHC.GenLocated GHC.SrcSpan GHC.Token) where
-  show t@(GHC.L l tok) = show ((getLocatedStart t, getLocatedEnd t),tok)
+  show t@(GHC.L _l tok) = show ((getLocatedStart t, getLocatedEnd t),tok)
 
 
 -- ----------------------------------------------------------------------
 
 -- |Get around lack of instance Eq when simply testing for empty list
+emptyList :: [t] -> Bool
 emptyList [] = True
 emptyList _  = False
 
+nonEmptyList :: [t] -> Bool
 nonEmptyList [] = False
 nonEmptyList _  = True
 
@@ -886,8 +1009,6 @@ getLocatedEnd (GHC.L l _) = getGhcLocEnd l
 -- the start and end location to cover the preceding and following
 -- comments.
 --
--- Note: what about trailing comment with interving white space, where
--- comment is "closer" to next non-comment token?
 startEndLocIncComments::(SYB.Data t) => [PosToken] -> t -> (SimpPos,SimpPos)
 startEndLocIncComments toks t = startEndLocIncComments' toks (getStartEndLoc t)
 
@@ -897,147 +1018,68 @@ startEndLocIncComments' toks (startLoc,endLoc) =
   let
     (begin,middle,end) = splitToks (startLoc,endLoc) toks
 
-    lead = reverse $ takeWhile (\tok -> isComment tok || isEmpty tok) $ reverse begin
-    lead' = if ((nonEmptyList lead) && (isEmpty $ head lead)) then (tail lead) else lead
+    (leadinr,leadr) = break (\tok -> not (isComment tok || isEmpty tok)) $ reverse begin
+    leadr' = filter (\t -> not (isEmpty t)) leadr
+    prevLine  = if (emptyList leadinr) then 0 else (tokenRow $ head leadr')
+    firstLine = if (emptyList middle)  then 0 else (tokenRow $ head middle)
+    (_,leadComments) = divideComments prevLine firstLine $ reverse leadinr
 
-    leadLine = if (nonEmptyList lead')
-                 then reverse $ takeWhile (\tok -> tokenRow (head lead') <= tokenRow tok) $ reverse begin
-                 else []
 
-    lead'' = if (nonEmptyList lead' && nonEmptyList leadLine && not (isComment $ head leadLine))
-               then dropWhile (\tok -> tokenRow tok == tokenRow (ghead "startEndLocIncComments 1" leadLine)) lead'
-               else lead'
-
-    -- trail = takeWhile (\tok -> isComment tok || isEmpty tok) $ end
     (trail,trailrest) = break (\tok -> not (isComment tok || isEmpty tok)) end
+    trail' = filter (\t -> not (isEmpty t)) trail
+    lastLine = if (emptyList middle)    then    0 else (tokenRow $ last middle)
+    nextLine = if (emptyList trailrest) then 1000 else (tokenRow $ head trailrest)
+    (trailComments,_) =  divideComments lastLine nextLine trail'
 
-    -- If whitespace line gap between then end of the middle and the
-    -- start of the tail is bigger than between the end of the trail
-    -- and the start of the trailrest, then let the trail belong to
-    -- the subsequent decl.
-
-    -- trail' = if ((nonEmptyList trail) && (isEmpty $ last trail)) then (init trail) else trail
-
-    trail'' = filter (\tok -> not $ isEmpty tok) trail
-
-    endDiff = if (emptyList trailrest) || (emptyList trail'')
-            then 1000
-            else (tokenRow $ ghead "startEndLocIncComments 2" trailrest) - (tokenRow $ last trail'')
-
-    startDiff = if (emptyList middle) || (emptyList trail'')
-            then 1000
-            else (tokenRow $ ghead "startEndLocIncComments 3" trail) - (tokenRow $ last middle)
-
-    trail' = if (startDiff <= endDiff)
-      then if ((nonEmptyList trail) && (isEmpty $ last trail))
-              then (init trail) else trail
-      else []
-
-    middle' = lead'' ++ middle ++ trail'
+    middle' = leadComments ++ middle ++ trailComments
   in
-    -- error $ "startEndLocIncComments: (startDiff,endDiff)=" ++ (show (startDiff,endDiff)) -- ++AZ++
-    -- error ( "startEndLocIncComments: (leadLine)=" ++ (show $ tokenRow (head lead')) ++  (showToks leadLine) ) -- ++AZ++
     if (emptyList middle')
-      -- then error $ "startEndLocIncComments: (startLoc,endLoc) toks =" ++ (show (startLoc,endLoc)) ++ "," ++ (showToks toks)
       then ((0,0),(0,0))
       else ((tokenPos $ ghead "startEndLocIncComments 4" middle'),(tokenPosEnd $ last middle'))
+      -- else error $ "startEndLocIncComments: (prevLine,firstLine) reverse leadr =" ++ (show (prevLine,firstLine)) ++ "," ++ (showToks $ reverse leadr)
 
-{- ++AZ++ re-doing this ...
--- ts1 : lead in toks
--- ts2 : start of t to end of file
--- ts11 : reversed leading blank lines of t
--- ts12 : front of file to start of ts11
+-- ---------------------------------------------------------------------
 
--- toks11 : front of file to start of blank lines before t
--- toks12 : blank lines, t, to end of file
--- toks12' : just the blank lines
+-- |Split a set of comment tokens into the ones that belong with the startLine
+-- and those that belong with the endLine
+divideComments :: Int -> Int -> [PosToken] -> ([PosToken],[PosToken])
+divideComments startLine endLine toks = (first,second)
+ -- error $ "divideComments:groupGaps=" ++ (show groupGaps)
+ -- error $ "divideComments:(firsts,seconds)=" ++ (show (firsts,seconds))
+  where
+    groups = groupBy groupByAdjacent toks
+    groupLines = map (\ts -> ((tokenRow $ ghead "divideComments" ts,tokenRow $ glast "divideComments" ts),ts)) groups
+    groupLines' = [((startLine,startLine),[])] ++ groupLines ++ [((endLine,endLine),[])]
+    groupGaps = go [] groupLines'
+    -- groupGaps is now a list of gaps followed by the tokens. The
+    -- last gap has an empty token list, since there is one more gap
+    -- than token groups
 
--- ITsemi with ""
--- ITlineComment
--- isComment
+    -- e.g [(0,[comments1]),(3,[comments2]),(1,[]) captures
+    --  ---------------------
+    --      b + bar -- ^trailing comment
+    --
+    --
+    -- -- leading comment
+    -- foo x y =
+    -- ----------------------
 
-  =let (startLoc,endLoc) = getStartEndLoc t
-       (toks11,toks12)= let (ts1,ts2)    = break (\tok->tokenPos tok == startLoc) toks
-                            -- (ts11, ts12) = break hasNewLn (reverse ts1)
-                            (ts11, ts12) = break (\tok->tokenRow tok /= fst startLoc) (reverse ts1)
-                        in (reverse ts12, reverse ts11++ts2)
-       toks12'=takeWhile (\tok->tokenPos tok /=startLoc) toks12
-       startLoc'=
-         if all isWhite toks12'
-           then  -- group the toks1 according to lines in a reverse order.
-                 let  groupedToks = reverse $ groupTokensByLine toks11
-                      -- empty lines right before t
-                      -- emptyLns=takeWhile (all (\t->isWhiteSpace t || isNewLn t )) groupedToks
-                      emptyLns=[] -- ++AZ++
-                      lastComment=if length emptyLns <= 1  -- get the comment if there is any
-                                    then takeWhile (all isWhite) $ takeWhile (any isComment) $ groupedToks -- dropWhile
-                                             --  (all (\t->isWhiteSpace t || isNewLn t)) groupedToks
-                                    else [] -- no comment
-                      toks1'=if (not (emptyList lastComment)) then concat $ reverse (emptyLns ++ lastComment)
-                                                 else []
-                 in if (emptyList toks1')
-                       then if (not (emptyList toks12'))
-                              then (tokenPos (ghead "startEndLocIncComments"  toks12'))  --there is no comment before t
-                              else startLoc
-                       --there is a comment before t
-                       else tokenPos (ghead "startEndLocIncComments"  toks1')
-           else startLoc
-       -- tokens after t
-       toks2 = gtail "startEndLocIncComments1" $ dropWhile (\tok->(tokenPos tok) < endLoc) toks
-       -- toks21 are those tokens that are in the same line with the last line of t
-       (toks21,_tok22)= let (ts11, ts12) = break hasNewLn toks2
-                       in (ts11 ++ if (emptyList ts12) then [] else [ghead "startEndLocIncComments" ts12],
-                                                             gtail "startEndLocIncComments2" ts12)
-    in if (emptyList toks21) then (startLoc',endLoc)  -- no following comments.
-        else if all (\t->isWhite t {- || endsWithNewLn t -}) toks21 --get the following white tokens in the same
-                                                              --line of the last token of t
-               then (startLoc', tokenPos (last toks21))
-               else (startLoc', endLoc)
--- ++AZ++ redoing end -}
+    biggest = maximum $ map fst groupGaps
 
+    (firsts,seconds) = break (\(g,_) -> g >= biggest) groupGaps
 
-{- ++original
-{-get the start&end location of t in the token stream, then extend the start and end location to
-  cover the preceding and folllowing comments.
--}
-startEndLocIncComments::(Term t, StartEndLoc t,Printable t)=>[PosToken]->t->(SimpPos,SimpPos)
-startEndLocIncComments toks t
-  =let (startLoc,endLoc)=getStartEndLoc toks t
-       (toks11,toks12)= let (ts1,ts2) = break (\t->tokenPos t == startLoc) toks
-                            (ts11, ts12) = break hasNewLn (reverse ts1)
-                        in (reverse ts12, reverse ts11++ts2)
-       toks12'=takeWhile (\t->tokenPos t /=startLoc) toks12
-       startLoc'=
-         if all isWhite  toks12'
-           then  -- group the toks1 according to lines in a reverse order.
-                 let  groupedToks=reverse $ groupTokensByLine toks11
-                      -- empty lines right before t
-                      emptyLns=takeWhile (all (\t->isWhiteSpace t || isNewLn t )) groupedToks
-                      lastComment=if length emptyLns <=1  -- get the comment if there is any
-                                    then takeWhile (all isWhite) $ takeWhile (any isComment) $ dropWhile
-                                               (all (\t->isWhiteSpace t || isNewLn t)) groupedToks
-                                    else [] -- no comment
-                      toks1'=if lastComment /=[] then concat $ reverse (emptyLns ++ lastComment)
-                                                 else []
-                 in if toks1'==[]
-                       then if toks12'/=[]
-                              then (tokenPos (ghead "startEndLocIncComments"  toks12'))  --there is no comment before t
-                              else startLoc
-                       --there is a comment before t
-                       else tokenPos (ghead "startEndLocIncComments"  toks1')
-           else startLoc
-       -- tokens after t
-       toks2=gtail "startEndLocIncComments1"  $ dropWhile (\t->tokenPos t/=endLoc) toks
-       -- toks21 are those tokens that are in the same line with the last line of t
-       (toks21,tok22)= let (ts11, ts12) = break hasNewLn toks2
-                       in (ts11 ++ if ts12==[] then [] else [ghead "startEndLocIncComments" ts12],
-                                                             gtail "startEndLocIncComments2" ts12)
-    in if toks21==[] then (startLoc',endLoc)  -- no following comments.
-        else if all (\t->isWhite t || endsWithNewLn t) toks21 --get the following white tokens in the same
-                                                              --line of the last token of t
-               then (startLoc', tokenPos (last toks21))
-               else (startLoc', endLoc)
--}
+    first = concatMap snd firsts
+    second = concatMap snd seconds
+
+    -- Helpers
+    groupByAdjacent :: PosToken -> PosToken -> Bool
+    groupByAdjacent a b = 1 + tokenRow a == tokenRow b
+
+    go :: [(Int,[PosToken])] -> [((Int,Int),[PosToken])] -> [(Int,[PosToken])]
+    go acc []  = acc
+    go acc [_x] = acc
+    go acc (((_s1,e1),_t1):b@((s2,_e2),t2):xs) = go (acc ++ [((s2 - e1),t2)] ) (b:xs)
+
 
 -- ---------------------------------------------------------------------
 
@@ -1047,7 +1089,7 @@ addOffsetToToks (r,c) toks = map (\t -> increaseSrcSpan (r,c) t) toks
 
 
 increaseSrcSpan :: SimpPos -> PosToken -> PosToken
-increaseSrcSpan (lineAmount,colAmount) posToken@(lt@(GHC.L l t), s) = (GHC.L newL t, s) where
+increaseSrcSpan (lineAmount,colAmount) posToken@(lt@(GHC.L _l t), s) = (GHC.L newL t, s) where
         filename = fileNameFromTok posToken
         newL = GHC.mkSrcSpan (GHC.mkSrcLoc filename startLine startCol) (GHC.mkSrcLoc filename endLine endCol)
         (startLine, startCol) = add1 $ getLocatedStart lt
@@ -1058,23 +1100,29 @@ increaseSrcSpan (lineAmount,colAmount) posToken@(lt@(GHC.L l t), s) = (GHC.L new
 
 -- ---------------------------------------------------------------------
 
--- isComment (t,(_,s))          = t==Comment || t ==NestedComment
-isComment ((GHC.L _ (GHC.ITdocCommentNext _)),s)  = True
-isComment ((GHC.L _ (GHC.ITdocCommentPrev _)),s)  = True
-isComment ((GHC.L _ (GHC.ITdocCommentNamed _)),s) = True
-isComment ((GHC.L _ (GHC.ITdocSection _ _)),s)    = True
-isComment ((GHC.L _ (GHC.ITdocOptions _)),s)      = True
-isComment ((GHC.L _ (GHC.ITdocOptionsOld _)),s)   = True
-isComment ((GHC.L _ (GHC.ITlineComment _)),s)     = True
-isComment ((GHC.L _ (GHC.ITblockComment _)),s)    = True
-isComment ((GHC.L _ _),s)                         = False
+isComment :: PosToken -> Bool
+isComment ((GHC.L _ (GHC.ITdocCommentNext _)),_s)  = True
+isComment ((GHC.L _ (GHC.ITdocCommentPrev _)),_s)  = True
+isComment ((GHC.L _ (GHC.ITdocCommentNamed _)),_s) = True
+isComment ((GHC.L _ (GHC.ITdocSection _ _)),_s)    = True
+isComment ((GHC.L _ (GHC.ITdocOptions _)),_s)      = True
+isComment ((GHC.L _ (GHC.ITdocOptionsOld _)),_s)   = True
+isComment ((GHC.L _ (GHC.ITlineComment _)),_s)     = True
+isComment ((GHC.L _ (GHC.ITblockComment _)),_s)    = True
+isComment ((GHC.L _ _),_s)                         = False
 
+isEmpty :: PosToken -> Bool
 isEmpty ((GHC.L _ (GHC.ITsemi)), "") = True
 isEmpty _                           = False
 
 --Some functions for fetching a specific field of a token
+tokenCol :: PosToken -> Int
 tokenCol (GHC.L l _,_) = c where (_,c) = getGhcLoc l
 
+tokenColEnd :: PosToken -> Int
+tokenColEnd (GHC.L l _,_) = c where (_,c) = getGhcLocEnd l
+
+tokenRow :: PosToken -> Int
 tokenRow (GHC.L l _,_) = r where (r,_) = getGhcLoc l
 
 tokenPos :: (GHC.GenLocated GHC.SrcSpan t1, t) -> SimpPos
@@ -1083,6 +1131,8 @@ tokenPos (GHC.L l _,_)     = getGhcLoc l
 tokenPosEnd :: (GHC.GenLocated GHC.SrcSpan t1, t) -> SimpPos
 tokenPosEnd (GHC.L l _,_)     = getGhcLocEnd l
 
+-- TODO: badly named function
+tokenCon :: PosToken -> String
 tokenCon (_,s)     = s
 
 -- ---------------------------------------------------------------------
@@ -1141,6 +1191,7 @@ getSrcSpan t = res t
     pnt :: GHC.GenLocated GHC.SrcSpan GHC.Name -> Maybe GHC.SrcSpan
     pnt (GHC.L l _)              = Just l
 
+    -- TODO: This is using GHC.RdrName, remove it
     sn :: GHC.HsModule GHC.RdrName -> Maybe GHC.SrcSpan
     sn (GHC.HsModule (Just (GHC.L l _)) _ _ _ _ _) = Just l
     sn _ = Nothing
@@ -1190,18 +1241,20 @@ splitToks (startPos, endPos) toks =
 -- ---------------------------------------------------------------------
 
 startEndLocGhc :: GHC.Located b -> (SimpPos,SimpPos)
-startEndLocGhc t@(GHC.L l _) =
+startEndLocGhc (GHC.L l _) =
   case l of
     (GHC.RealSrcSpan ss) ->
       ((GHC.srcSpanStartLine ss,GHC.srcSpanStartCol ss),
-       (GHC.srcSpanEndLine ss,GHC.srcSpanEndCol ss))
+       (GHC.srcSpanEndLine ss,  GHC.srcSpanEndCol ss))
     (GHC.UnhelpfulSpan _) -> ((0,0),(0,0))
+
+-- ---------------------------------------------------------------------
 
 -- | Get the indent of the line before, taking into account in-line
 -- where, let, in and do tokens
 getIndentOffset :: [PosToken] -> SimpPos -> Int
 getIndentOffset [] _pos    = 1
-getIndentOffset toks (0,0) = 1
+getIndentOffset _toks (0,0) = 1
 getIndentOffset toks pos
   = let (ts1, ts2) = break (\t->tokenPos t >= pos) toks
     in if (emptyList ts2)
@@ -1228,7 +1281,7 @@ getIndentOffset toks pos
 -- ---------------------------------------------------------------------
 
 splitOnNewLn :: [PosToken] -> ([PosToken],[PosToken])
-splitOnNewLn xs = go [] xs
+splitOnNewLn toks = go [] toks
   -- ++AZ++ : TODO: is this simpler? : (toks1,toks2)=break (\x' -> tokenRow x /= tokenRow x') rtoks
 
   where
@@ -1241,11 +1294,8 @@ splitOnNewLn xs = go [] xs
 
 -- ---------------------------------------------------------------------
 
+tokenLen :: PosToken -> Int
 tokenLen (_,s)     = length s   --check this again! need to handle the tab key.
-{-
-lengthOfToks::[PosToken]->Int
-lengthOfToks=length.(concatMap tokenCon)
--}
 
 -- ---------------------------------------------------------------------
 
@@ -1272,6 +1322,49 @@ newLinesToken jump (GHC.L l _,_) = (GHC.L l' GHC.ITvocurly,"")
        in
          GHC.mkSrcSpan loc loc
      _ -> l
+
+-- ---------------------------------------------------------------------
+
+groupTokensByLine :: [PosToken] -> [[PosToken]]
+groupTokensByLine [] = []
+groupTokensByLine (xs) = let x = head xs
+                             (xs', xs'') = break (\x' -> tokenRow x /= tokenRow x') xs
+                      in case xs'' of
+                        [] -> [xs']
+                        _ ->  (xs'++ [ghead "groupTokensByLine" xs''])
+                                : groupTokensByLine (gtail "groupTokensByLine" xs'')
+
+
+-- ---------------------------------------------------------------------
+
+-- | Make sure all tokens have at least one space between them
+-- TODO: pretty sure this can be simplified
+reAlignToks :: [PosToken] -> [PosToken]
+reAlignToks [] = []
+reAlignToks [t] = [t]
+reAlignToks (tok1@((GHC.L l1 _t1),_s1):tok2@((GHC.L l2 t2),s2):ts)
+  = tok1:reAlignToks (tok2':ts)
+   where
+     ((_sr1,_sc1),(er1,ec1)) = (getGhcLoc l1,getGhcLocEnd l1)
+     (( sr2, sc2),(er2,ec2)) = (getGhcLoc l2,getGhcLocEnd l2)
+
+     ((sr,sc),(er,ec)) = if (er1 == sr2 && ec1 >= sc2)
+              then ((sr2,ec1+1),(er2,ec1+1 + tokenLen tok2))
+              else ((sr2,sc2),(er2,ec2))
+
+     fname = case l2 of
+               GHC.RealSrcSpan ss -> GHC.srcSpanFile ss
+               _ -> GHC.mkFastString "foo"
+     l2' = GHC.mkRealSrcSpan (GHC.mkRealSrcLoc fname sr sc)
+                             (GHC.mkRealSrcLoc fname er ec)
+     tok2' = ((GHC.L (GHC.RealSrcSpan l2') t2),s2)
+
+-- ---------------------------------------------------------------------
+
+-- |Adjust token stream to cater for changes in token length due to
+-- token renaming
+reSequenceToks :: [PosToken] -> [PosToken]
+reSequenceToks toks = toks
 
 -- ---------------------------------------------------------------------
 
