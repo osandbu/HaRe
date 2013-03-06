@@ -13,7 +13,7 @@ module Language.Haskell.Refact.Utils.LocUtils(
                      , realSrcLocFromTok
                      , isWhite
                      , notWhite
-                     , isWhiteSpace
+                     -- , isWhiteSpace
                      {-
                      ,isNewLn,isCommentStart -},isComment {-,
                      isNestedComment-},isMultiLineComment {-,isOpenBracket,isCloseBracket, -}
@@ -26,7 +26,7 @@ module Language.Haskell.Refact.Utils.LocUtils(
                      , lengthOfLastLine
                      , updateToks, updateToksWithPos
                      , getToks
-                     , replaceToks,replaceTok,deleteToks,doRmWhites -- ,doAddWhites
+                     , replaceToks,replaceTok,replaceTokNoReAlign,deleteToks,doRmWhites -- ,doAddWhites
                      , srcLocs
                      , getSrcSpan, getAllSrcLocs
                      -- , ghcSrcLocs -- Test version
@@ -162,9 +162,6 @@ isWhite (GHC.L _ _                        ,_) = False
 
 notWhite  = not.isWhite
 
--- ++WARNING++ : there is no explicit Whitespace token in GHC.
--- isWhiteSpace (t,(_,s))       = t==Whitespace && s==" "
-isWhiteSpace _  = False
 
 {-
 isNewLn (t,(_,s))            = t==Whitespace && s=="\n"
@@ -623,9 +620,22 @@ replaceTok toks pos newTok =
       (toks1,toks2) = break (\t -> tokenPos t >= pos && tokenLen t > 0) toks
       (toksSameLine,toksRest) = if emptyList toks2
          then error $ "replaceTok(" ++ show pos ++ "): token not in stream"
-         else break (newRowFound (head $ tail toks2))  (tail toks2)
+         else break (newRowFound (ghead "replaceTok" $ tail toks2))  (tail toks2)
 
       newRowFound t1 t2 = tokenRow t1 /= tokenRow t2
+      newTok' = markToken newTok
+
+-- ---------------------------------------------------------------------
+
+-- |Replace a single token in the token stream by a new token, without
+-- adjusting the layout.
+-- Note: does not re-align, else other later replacements may fail.
+replaceTokNoReAlign::[PosToken]->SimpPos->PosToken->[PosToken]
+replaceTokNoReAlign toks pos newTok =
+    toks1 ++ [newTok'] ++ toksRest
+   where
+      (toks1,toks2) = break (\t -> tokenPos t >= pos && tokenLen t > 0) toks
+      toksRest = if (emptyList toks2) then [] else (gtail "replaceTokNoReAlign" toks2)
       newTok' = markToken newTok
 
 -- ---------------------------------------------------------------------
@@ -1036,8 +1046,8 @@ getAllSrcLocs t = res t
 
 getStartEndLoc2::(SYB.Data t)=>[PosToken]->[GHC.GenLocated GHC.SrcSpan t] ->(SimpPos,SimpPos)
 getStartEndLoc2 toks ts
-  = let (startPos',_) = startEndLocGhc (head ts)
-        (_ , endPos') = startEndLocGhc (last ts)
+  = let (startPos',_) = startEndLocGhc (ghead "getStartEndLoc2" ts)
+        (_ , endPos') = startEndLocGhc (glast "getStartEndLoc2" ts)
         locs = srcLocs ts
         (startPos,endPos) = (if startPos' == simpPos0 && locs /=[] then ghead "getStartEndLoc" locs
                                                                    else startPos',

@@ -5,16 +5,11 @@ module Language.Haskell.Refact.Utils.MonadFunctions
          initRefactModule
 
        -- * Conveniences for state access
-       , fetchToks
+
+       -- * Original API provided
+       , fetchToks -- ^Deprecated
        , fetchOrigToks
        , putToks -- ^Deprecated
-       , putToksForSpan
-       , putToksForPos
-       , putToksAfterSpan
-       , putToksAfterPos
-       , putDeclToksAfterSpan
-       -- , putNewSpanAndToks
-       -- , putNewPosAndToks
        , getTypecheckedModule
        , getRefactStreamModified
        , getRefactInscopes
@@ -23,6 +18,18 @@ module Language.Haskell.Refact.Utils.MonadFunctions
        , getRefactParsed
        , putParsedModule
        , clearParsedModule
+
+       -- * TokenUtils API
+       , putToksForSpan
+       , getToksForSpan
+       , putToksForPos
+       , putToksAfterSpan
+       , putToksAfterPos
+       , putDeclToksAfterSpan
+       , removeToksForSpan
+       , removeToksForPos
+       -- , putNewSpanAndToks
+       -- , putNewPosAndToks
 
        -- * For debugging
        , getTokenTree
@@ -102,6 +109,18 @@ putToks toks isModified = do
 -- TODO: ++AZ: these individual calls should happen via the TokenUtils
 --       API, have a simple get/put interface here only
 
+-- |Get the current tokens for a given GHC.SrcSpan.
+getToksForSpan ::  GHC.SrcSpan -> RefactGhc [PosToken]
+getToksForSpan sspan = do
+  st <- get
+  let Just tm = rsModule st
+  let (forest',toks) = getTokensFor (rsTokenCache tm) sspan 
+  let rsModule' = Just (tm {rsTokenCache = forest'})
+  put $ st { rsModule = rsModule' }
+  liftIO $ putStrLn $ "getToksForSpan " ++ (GHC.showPpr sspan) ++ ":" ++ (show (ghcSpanStartEnd sspan,toks))
+  return toks
+
+
 -- |Replace the tokens for a given GHC.SrcSpan, return new GHC.SrcSpan
 -- delimiting new tokens
 putToksForSpan ::  GHC.SrcSpan -> [PosToken] -> RefactGhc GHC.SrcSpan
@@ -141,7 +160,7 @@ putToksAfterSpan oldSpan pos toks = do
 -- |Add tokens after a designated GHC.SrcSpan
 putToksAfterPos :: (SimpPos,SimpPos) -> Positioning -> [PosToken] -> RefactGhc GHC.SrcSpan
 putToksAfterPos pos position toks = do
-  liftIO $ putStrLn $ "putToksAfterPos " ++ (show pos)
+  liftIO $ putStrLn $ "putToksAfterPos " ++ (show pos) ++ " at "  ++ (show position)
   st <- get
   let Just tm = rsModule st
   let sspan = posToSrcSpan (rsTokenCache tm) pos
@@ -153,15 +172,39 @@ putToksAfterPos pos position toks = do
 -- |Add tokens after a designated GHC.SrcSpan, and update the AST
 -- fragment to reflect it
 putDeclToksAfterSpan :: (SYB.Data t) => GHC.SrcSpan -> GHC.Located t -> Positioning -> [PosToken] -> RefactGhc (GHC.Located t)
+-- putDeclToksAfterSpan :: (SYB.Data t) => GHC.SrcSpan -> GHC.Located t -> Positioning -> [PosToken] -> RefactGhc t
 putDeclToksAfterSpan oldSpan t pos toks = do
-  liftIO $ putStrLn $ "putToksAfterSpan " ++ (GHC.showPpr oldSpan)
+  liftIO $ putStrLn $ "putDeclToksAfterSpan " ++ (GHC.showPpr oldSpan) ++ ":" ++ (show (pos,toks))
   st <- get
   let Just tm = rsModule st
-  let (forest',newSpan) = addToksAfterSrcSpan (rsTokenCache tm) oldSpan pos toks
-  let (t',forest'') = syncAST t newSpan forest'
+  let (forest'',_newSpan, t') = addDeclToksAfterSrcSpan (rsTokenCache tm) oldSpan pos toks t
   let rsModule' = Just (tm {rsTokenCache = forest'', rsStreamModified = True})
   put $ st { rsModule = rsModule' }
   return t'
+
+-- |Remove a GHC.SrcSpan and its associated tokens
+removeToksForSpan :: GHC.SrcSpan -> RefactGhc ()
+removeToksForSpan sspan = do
+  liftIO $ putStrLn $ "removeToksForSpan " ++ (GHC.showPpr sspan)
+  st <- get
+  let Just tm = rsModule st
+  let forest' = removeSrcSpan (rsTokenCache tm) (srcSpanToForestSpan sspan)
+  let rsModule' = Just (tm {rsTokenCache = forest', rsStreamModified = True})
+  put $ st { rsModule = rsModule' }
+  return ()
+
+-- |Remove a GHC.SrcSpan and its associated tokens
+removeToksForPos :: (SimpPos,SimpPos) -> RefactGhc ()
+removeToksForPos pos = do
+  liftIO $ putStrLn $ "removeToksForPos " ++ (show pos)
+  st <- get
+  let Just tm = rsModule st
+  let sspan = posToSrcSpan (rsTokenCache tm) pos
+  let forest' = removeSrcSpan (rsTokenCache tm) (srcSpanToForestSpan sspan)
+  let rsModule' = Just (tm {rsTokenCache = forest', rsStreamModified = True})
+  put $ st { rsModule = rsModule' }
+  liftIO $ putStrLn $ "removeToksForPos result:" ++ (show forest')
+  return ()
 
 -- ---------------------------------------------------------------------
 
