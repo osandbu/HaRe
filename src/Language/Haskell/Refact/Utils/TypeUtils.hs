@@ -274,7 +274,7 @@ lookupNameGhc n = do
 -- ---------------------------------------------------------------------
 -- | Show a PName in a format like: 'pn'(at row:r, col: c).
 showPNwithLoc::GHC.Located GHC.Name->String
-showPNwithLoc pn@(GHC.L l n)
+showPNwithLoc pn@(GHC.L l _n)
   = let (r,c) = getGhcLoc l
     -- in  " '"++pNtoName pn++"'" ++"(at row:"++show r ++ ",col:" ++ show c ++")"
     in  " '"++GHC.showPpr pn++"'" ++"(at row:"++show r ++ ",col:" ++ show c ++")"
@@ -304,6 +304,7 @@ defaultExp::HsExpP
 defaultExp=GHC.HsVar $ mkRdrName "nothing"
 
 
+mkRdrName :: String -> GHC.RdrName
 mkRdrName s = GHC.mkVarUnqual (GHC.mkFastString s)
 
 -- | Make a new GHC.Name, using the Unique Int sequence stored in the
@@ -2435,32 +2436,26 @@ addImportDecl ::
     GHC.RenamedSource -> GHC.ModuleName -> Maybe GHC.FastString -> Bool -> Bool -> Bool ->
         Maybe String -> Bool -> [GHC.Name] -> RefactGhc GHC.RenamedSource
 addImportDecl (groupedDecls,imp, b, c) modName pkgQual source safe qualify alias hide idNames
-  = do toks <- fetchToks
-       let (toks1, toks2)
+  = do
+       toks <- fetchToks
+       let toks1
                =if length imps' > 0
                    then let (_startLoc, endLoc) = getStartEndLoc $ last imps'
                             toks1' = getToks ((1,1),endLoc) toks
-                            toks2' = dropWhile (\t -> (tokenPos t) <= tokenPos (last toks1')) toks
-                        in (toks1', toks2')
+                        in toks1'
                    else if not $ isEmptyGroup groupedDecls
                           then
                                let startLoc = fst $ startEndLocIncComments toks groupedDecls
-                                   (toks1', toks2') = break (\t ->tokenPos t==startLoc) toks
-                               in (toks1',  toks2')
-                          else (toks,[])
-           before = "\n\n"
+                                   (toks1', _toks2') = break (\t ->tokenPos t==startLoc) toks
+                               in toks1'
+                          else toks
 
-           colOffset = if length imps' == 0 && isEmptyGroup groupedDecls
-                        then 1
-                        else getIndentOffset toks
-                                $ if length imps' > 0 then fst $ getStartEndLoc (ghead "addImportDecl4" imps')
-                                               else fst $ startEndLocIncComments toks  groupedDecls
+       let startPos = tokenPos      $ glast "addImportDecl" toks1
+       let endPos   = tokenPosEnd $ glast "addImportDecl" toks1
 
-           loc' = realSrcLocFromTok $ (glast "addImportDecl5" toks1)
-       impToks <- liftIO $ tokenise loc' (colOffset-1) True
-                      $ before ++ (GHC.showPpr impDecl)
-       let toks' = toks1++impToks++ (map (increaseSrcSpan (2,0)) toks2)
-       putToks toks' True
+       newToks <- liftIO $ basicTokenise (GHC.showPpr impDecl)
+       liftIO $ putStrLn $ "addImportDecl:newToks=" ++ (show newToks) -- ++AZ++
+       putToksAfterPos (startPos,endPos) (PlaceOffset 1 0 1) newToks
        return (groupedDecls, (imp++[(mkNewLSomething impDecl)]), b, c)
   where
 
@@ -2652,7 +2647,7 @@ addDecl parent pn (decl, msig, declToks) topLevel
                             then getSrcSpan (glast "addTopLevelDecl" decls1)
                             else getSrcSpan (ghead "addTopLevelDecl" decls2)
 
-         decl' <- putDeclToksAfterSpan sspan decl (PlaceOffset 1 0 2) newToks
+         decl' <- putDeclToksAfterSpan sspan decl (PlaceOffset 2 0 2) newToks
 
          case maybeSig of
            Nothing  -> return (replaceBinds    parent (decls1++[decl']++decls2))
@@ -2667,7 +2662,7 @@ addDecl parent pn (decl, msig, declToks) topLevel
     = do let binds = hsValBinds parent
          newToks <- makeNewToks (decl,maybeSig,declToks)
          let Just sspan = getSrcSpan $ ghead "appendDecl" after
-         decl' <- putDeclToksAfterSpan sspan decl (PlaceOffset 1 0 2) newToks
+         decl' <- putDeclToksAfterSpan sspan decl (PlaceOffset 2 0 2) newToks
 
          let decls1 = before ++ [ghead "appendDecl14" after]
              decls2 = gtail "appendDecl15" after
@@ -2687,19 +2682,17 @@ addDecl parent pn (decl, msig, declToks) topLevel
     =do
         let binds = hsValBinds parent
 
-        let (startLoc,endLoc) 
+        let (startLoc,endLoc)
              = if (emptyList localDecls)
                  then getStartEndLoc parent
                  else getStartEndLoc localDecls
 
         newToks <- liftIO $ basicTokenise newSource
-        -- error $ "TypeUtils.addLocalDecl:newToks=" ++ (showToks newToks) -- ++AZ++
+
         (newFun',_) <- addLocInfo (newFun, newToks) -- This function calles problems because of the lexer.
 
         let colIndent = if (emptyList localDecls) then 4 else 0
-            rowIndent = 0
-
-        -- error $ "TypeUtils.addLocalDecl:((startLoc,endLoc),(PlaceIndent rowIndent colIndent 2),newToks)=" ++ (show ((startLoc,endLoc),(PlaceIndent rowIndent colIndent 2),newToks)) -- ++AZ++
+            rowIndent = 1
 
         _ <- putToksAfterPos (startLoc,endLoc) (PlaceIndent rowIndent colIndent 2) newToks
 
@@ -2861,8 +2854,9 @@ addParamsToDecls::
       ->Bool        -- ^ Modify the token stream or not.
       ->RefactGhc [GHC.LHsBind GHC.Name] -- ^ The result.
 
-addParamsToDecls decls pn paramPNames modifyToks
-   = if (paramPNames/=[])
+addParamsToDecls decls pn paramPNames modifyToks = do
+  liftIO $ putStrLn $ "addParamsToDecls (pn,paramPNames,modifyToks)=" ++ (GHC.showPpr (pn,paramPNames,modifyToks))
+  if (paramPNames/=[])
         then mapM addParamToDecl decls
         else return decls
   where
@@ -3252,14 +3246,20 @@ duplicateDecl decls sigs n newFunName
       let Just sspan = getSrcSpan funBinding
       toks <- getToksForSpan sspan
 
-      let Just sspanSig = getSrcSpan typeSig
-      toksSig  <- getToksForSpan sspanSig
+      newSpan <- case typeSig of
+        [] -> return sspan
+        _  -> do
+          let Just sspanSig = getSrcSpan typeSig
+          toksSig  <- getToksForSpan sspanSig
 
-      typeSig' <- putDeclToksAfterSpan sspan (ghead "duplicateDecl" typeSig) (PlaceOffset 1 0 0) toksSig
-      typeSig''     <- renamePN n newFunName True typeSig'
+          typeSig'  <- putDeclToksAfterSpan sspan (ghead "duplicateDecl" typeSig) (PlaceIndent 2 0 0) toksSig
+          typeSig'' <- renamePN n newFunName True typeSig'
 
-      let (GHC.L newSpan _) = typeSig'
-      funBinding'  <- putDeclToksAfterSpan newSpan (ghead "duplicateDecl" funBinding) (PlaceOffset 0 0 1) toks
+          let (GHC.L sspanSig' _) = typeSig'
+
+          return sspanSig'
+
+      funBinding'  <- putDeclToksAfterSpan newSpan (ghead "duplicateDecl" funBinding) (PlaceIndent 1 0 1) toks
       funBinding'' <- renamePN n newFunName True funBinding'
 
       -- return (typeSig'++funBinding') -- ++AZ++ TODO: reinstate this
@@ -3268,82 +3268,6 @@ duplicateDecl decls sigs n newFunName
        declsToDup = definingDeclsNames [n] decls True False -- ++AZ++ should recursive be set true?
        funBinding = filter isFunOrPatBindR declsToDup     --get the fun binding.
        typeSig = definingSigsNames [n] sigs
-
-
-{- Prior to using TokenUtils
--- | Duplicate a functon\/pattern binding declaration under a new name
--- right after the original one. Also updates the token stream.
-duplicateDecl::(SYB.Data t) =>
-  [GHC.LHsBind GHC.Name]  -- ^ The declaration list
-  ->t                     -- ^ Any signatures are in here
-  ->GHC.Name              -- ^ The identifier whose definition is to be duplicated
-  ->GHC.Name              -- ^ The new name (possibly qualified)
-  ->RefactGhc [GHC.LHsBind GHC.Name]  -- ^ The result
-duplicateDecl decls sigs n newFunName
- = do
-      toks <- fetchToks
-      let (startPos, endPos) = startEndLocIncComments toks funBinding
-          {-take those tokens before (and include) the function
-            binding and its following white tokens before the 'new line' token.
-            (some times the function may be followed by comments) -}
-          toks1 = ts1++[ghead "duplicateDecl" ts2]
-                    where (ts1, ts2) = break (\t -> (tokenPos t) > endPos) toks
-          -- take those token after (and include) the function binding
-          toks2 = dropWhile (\t -> tokenPos t /= startPos {- || isNewLn t -}) toks
-
-      -- At this point
-      --   toks1 is from the start up to and including the decl,
-      --   toks2 is the binding to the end
-
-      -- liftIO $ putStrLn ("TypeUtils.duplicateDecl:toks1=" ++ (showToks toks1)) -- ++AZ++ debug
-      putToks toks2 True
-
-      --rename the function name to the new name, and update token
-      --stream (toks2, just updated) as well, in the monad
-      funBinding' <- renamePN n newFunName True funBinding
-      --rename function name in type signature  without adjusting the token stream
-      typeSig'  <- renamePN n newFunName False typeSig
-
-      -- Get the updated token stream
-      toks3 <- fetchToks
-
-      -- liftIO $ putStrLn ("TypeUtils.duplicateDecl:(fst (getStartEndLoc funBinding))=" ++ (show (fst $ getStartEndLoc funBinding))) -- ++AZ++ debug 12
-      -- error ("TypeUtils.duplicateDecl:(funBinding)=" ++ (GHC.showPpr funBinding)) -- ++AZ++ debug 12
-      -- error ("TypeUtils.duplicateDecl:(fst (getStartEndLoc funBinding))=" ++ (show (fst $ getStartEndLoc funBinding))) -- ++AZ++ debug 12
-
-      let offset = getIndentOffset toks (fst (getStartEndLoc funBinding))
-          newLineTok = if ((not (emptyList toks1)) {-&& endsWithNewLn (glast "doDuplicating" toks1 -})
-                         then [newLnToken (last toks1)]
-                         else [newLnToken (last toks1), newLnToken (last toks1)]
-
-          toks'= if (not $ emptyList typeSig)
-                 then let offset = tokenCol ((ghead "doDuplicating 1") (dropWhile (\t->isWhite t) toks3))
-                          -- (GHC.L l t,s) = glast "doDuplicating" toks1
-                          (GHC.L lf t,_s) = ghead "doDuplicating 2" $ getToks (getStartEndLoc funBinding) toks
-                          (GHC.L ll _,_) = head newLineTok
-                          (_,col) = getGhcLoc lf
-                          (line,_) = getGhcLoc ll
-                          -- (_line,col) = (fst (getStartEndLoc funBinding))
-
-                          -- newToken = mkToken t start (prettyprint $ ghead "duplicateDecl" typeSig')
-                          newToken = mkToken t (line,col) (prettyprint $ ghead "duplicateDecl" typeSig')
-                          newLineTokAfter = [newLnToken newToken]
-
-                          -- sigSource = concatMap (\s->replicate (offset-1) ' '++s++"\n")((lines.render.ppi) typeSig')
-                          -- t = mkToken Whitespace (0,0) sigSource
-                      -- in  (toks1++newLineTok++[t]++(whiteSpacesToken (0,0) (snd startPos-1))++toks3)
-                      -- in  (toks1++newLineTok++[newToken]++newLineTok++toks3)
-                      in  (toks1++newLineTok++[newToken]++newLineTokAfter++toks3)
-                 else  (toks1++newLineTok++toks3)
-
-      putToks toks' True
-      -- return (typeSig'++funBinding') -- ++AZ++ TODO: reinstate this
-      return funBinding'
-     where
-       declsToDup = definingDeclsNames [n] decls True False -- ++AZ++ should recursive be set true?
-       funBinding = filter isFunOrPatBindR declsToDup     --get the fun binding.
-       typeSig = definingSigsNames [n] sigs
--}
 
 -- ---------------------------------------------------------------------
 
@@ -3354,12 +3278,22 @@ rmDecl:: (SYB.Data t)
         =>GHC.Name     -- ^ The identifier whose definition is to be removed.
         ->Bool         -- ^ True means including the type signature.
         ->t            -- ^ The declaration list.
-        -> RefactGhc t -- ^ The result.
+        -> RefactGhc (t,GHC.LHsBind GHC.Name) -- ^ The result, and the
+                                              -- removed declaration,
+                                              -- with SrcSpans
+                                              -- adjusted to reflect
+                                              -- the stashed tokens
 rmDecl pn incSig t = do
+  liftIO $ putStr $ "rmDecl:(pn,incSig)= " ++ (GHC.showPpr (pn,incSig)) -- ++AZ++
+  setStateStorage StorageNone
   t'  <- everywhereMStaged SYB.Renamer (SYB.mkM inDecls) t
   t'' <- if incSig then rmTypeSig pn t'
                    else return t'
-  return t''
+  storage <- getStateStorage
+  let decl' = case storage of
+                StorageBind bind -> bind
+                x                -> error $ "rmDecl: unexpected value in StateStorage:" ++ (show x)
+  return (t'',decl')
   where
     inDecls (decls::[GHC.LHsBind GHC.Name])
       | not $ emptyList (snd (break (defines pn) decls)) -- /=[]
@@ -3375,13 +3309,13 @@ rmDecl pn incSig t = do
     rmTopLevelDecl :: GHC.LHsBind GHC.Name -> [GHC.LHsBind GHC.Name]
                 -> RefactGhc [GHC.LHsBind GHC.Name]
     rmTopLevelDecl decl decls
-      =do {-
-          toks <- fetchToks
-          let (startLoc, endLoc)=startEndLocIncComments toks decl
-              toks'= deleteToks toks startLoc endLoc
-          putToks toks' modified
-          -}
+      =do
+          liftIO $ putStrLn $ "rmTopLevelDecl:" -- ++AZ++
+
           removeToksForPos (getStartEndLoc decl)
+          decl' <- syncDeclToLatestStash decl
+          setStateStorage (StorageBind decl')
+
           let (decls1, decls2) = break (defines pn) decls
               decls2' = gtail "rmLocalDecl 1" decls2
           return $ (decls1 ++ decls2')
@@ -3397,145 +3331,66 @@ rmDecl pn incSig t = do
     -- |Remove a location declaration that defines pn.
     rmLocalDecl :: GHC.LHsBind GHC.Name -> [GHC.LHsBind GHC.Name]
                 -> RefactGhc [GHC.LHsBind GHC.Name]
-    rmLocalDecl decl decls
+    rmLocalDecl decl@(GHC.L sspan _) decls
      = do
-         toks <- fetchToks
-         let (startPos,endPos) = getStartEndLoc decl   --startEndLoc toks decl
-             (startPos',endPos')=startEndLocIncComments toks decl
-             --(startPos',endPos')=startEndLocIncFowComment toks decl
-             toks'=if length decls==1  --only one decl, which means the accompaning 'where',
-                                       --'let' or'in' should be removed too.
-                   then let (toks1,toks2)=break (\t->tokenPos t==startPos) toks --devide the token stream.
-                              --get the  'where' or 'let' token
-                            rvToks1 = dropWhile (not.isWhereOrLet) (reverse toks1)
-                            --There must be a 'where' or 'let', so rvToks1 can not be empty.
-                            whereOrLet=ghead "rmLocalFunPatBind:whereOrLet" rvToks1
-                            --drop the 'where' 'or 'let' token
-                            toks1'=takeWhile (\t->tokenPos t/=tokenPos whereOrLet) toks1
-                            --remove the declaration from the token stream.
-                            toks2'=gtail "rmLocalDecl 2" $ dropWhile (\t->tokenPos t<endPos') toks2
-                            --get the remained tokens after the removed declaration.
-                            remainedToks=dropWhile isWhite toks2'
-                        in if (emptyList remainedToks)
-                             then --the removed declaration is the last decl in the file.
-                                  (compressEndNewLns toks1'++ compressPreNewLns toks2')
-                             else if --remainedToks/=[], so no problem with head.
-                                    isIn (ghead "rmLocalDecl:isIn"  remainedToks)
-                                         || isComma (ghead "rmLocalDecl:isComma" remainedToks)
-                                        --There is a 'In' after the removed declaration.
-                                   then if isWhere whereOrLet
-                                           then deleteToks toks (tokenPos whereOrLet) endPos'
-                                           else deleteToks toks (tokenPos whereOrLet)
-                                                   $ tokenPos (ghead "rmLocalDecl:tokenPos" remainedToks)
-                                        --delete the decl and adjust the layout
-                                   else if isCloseSquareBracket (ghead "rmLocalDecl:isCloseSquareBracker" remainedToks) &&
-                                           (isBar.(ghead "rmLocalDecl:isBar")) (dropWhile isWhite (tail rvToks1))
-                                         then deleteToks toks (tokenPos((ghead "rmLocalDecl")
-                                                        (dropWhile isWhite (tail rvToks1)))) endPos'
-                                         else deleteToks toks (tokenPos whereOrLet) endPos'
-                        --there are more than one decls
-                   else  deleteToks toks startPos' endPos'
-         putToks toks' modified --Change the above endPos' to endPos will not delete the following comments.
-         -- return $ (decls \\ [decl])
+         -- toks <- fetchToks
+         -- let (startPos,endPos) = getStartEndLoc decl   --startEndLoc toks decl
+         prevToks <- getToksBeforeSpan sspan -- Need these before
+                                             -- sspan is deleted
+         removeToksForPos (getStartEndLoc decl)
+         decl' <- syncDeclToLatestStash decl
+         setStateStorage (StorageBind decl')
+
+         -- ++AZ++: TODO: get rid of where clause, if no more decls
+         -- here
+         case length decls of
+           1 -> do
+             -- Get rid of preceding where or let token
+             -- prevToks <- getToksBeforeSpan sspan
+             let startPos = getGhcLoc sspan
+                 (_toks1,toks2)=break (\t1->tokenPos t1 < startPos) $ reverse prevToks --divide the token stream.
+                 --get the  'where' or 'let' token
+                 rvToks1 = dropWhile (not.isWhereOrLet) toks2
+                 --There must be a 'where' or 'let', so rvToks1 can not be empty.
+                 whereOrLet=ghead "rmLocalDecl:whereOrLet" rvToks1
+                 --drop the 'where' 'or 'let' token
+
+                 rmEndPos = tokenPos $ ghead "rmLocalDecl.2" toks2
+                 rmStartPos = tokenPos whereOrLet
+
+             liftIO $ putStr $ "rmLocalDecl: where/let tokens are at" ++ (show (rmStartPos,rmEndPos)) -- ++AZ++ 
+
+             removeToksForPos (rmStartPos,rmEndPos)
+             return ()
+           _ -> return ()
 
          let (decls1, decls2) = break (defines pn) decls
              decls2' = gtail "rmLocalDecl 3" decls2
          return $ (decls1 ++ decls2')
 
 
-{- ++ original ++
-
-{-
-rmDecl::(MonadState (([PosToken],Bool),t1) m)
-        =>PName       -- ^ The identifier whose definition is to be removed.
-        ->Bool        -- ^ True means including the type signature.
-        ->[HsDeclP]   -- ^ The declaration list.
-        -> m [HsDeclP]-- ^ The result.
--}
-rmDecl pn incSig t = applyTP (once_tdTP (failTP `adhocTP` inDecls)) t
-  where
-    inDecls (decls::[HsDeclP])
-      | snd (break (defines pn) decls) /=[]
-      = do let (decls1, decls2) = break (defines pn) decls
-               decl = ghead "rmDecl" decls2
-           -- error $ (render.ppi) t -- ecl ++ (show decl)
-           case isTopLevelPN  pn of
-                     True   -> if incSig then rmTopLevelDecl decl =<< rmTypeSig pn decls
-                                         else rmTopLevelDecl decl decls
-                     False  -> if incSig then rmLocalDecl decl =<< rmTypeSig pn decls
-                                         else rmLocalDecl decl decls
-    inDecls x = mzero
-    rmTopLevelDecl decl decls
-      =do ((toks,_),others)<-get
-          let (startLoc, endLoc)=startEndLocIncComments toks decl
-              toks'=deleteToks toks startLoc endLoc
-          put ((toks',modified),others)
-          return (decls \\ [decl])
-
-  {- The difference between removing a top level declaration and a local declaration is:
-     if the local declaration to be removed is the only declaration in current declaration list,
-     then the 'where'/ 'let'/'in' enclosing this declaration should also be removed.
-     Whereas, when a only top level decl is removed, the 'where' can not be removed.
-   -}
-   -- |Remove a location declaration that defines pn.
-    rmLocalDecl decl decls
-     =do ((toks,_),others)<-get
-         let (startPos,endPos)=getStartEndLoc toks decl   --startEndLoc toks decl
-             (startPos',endPos')=startEndLocIncComments toks decl
-             --(startPos',endPos')=startEndLocIncFowComment toks decl
-             toks'=if length decls==1  --only one decl, which means the accompaning 'where',
-                                       --'let' or'in' should be removed too.
-                   then let (toks1,toks2)=break (\t->tokenPos t==startPos) toks --devide the token stream.
-                              --get the  'where' or 'let' token
-                            rvToks1=dropWhile (not.isWhereOrLet) (reverse toks1)
-                            --There must be a 'where' or 'let', so rvToks1 can not be empty.
-                            whereOrLet=ghead "rmLocalFunPatBind:whereOrLet" rvToks1
-                            --drop the 'where' 'or 'let' token
-                            toks1'=takeWhile (\t->tokenPos t/=tokenPos whereOrLet) toks1
-                            --remove the declaration from the token stream.
-                            toks2'=gtail "rmLocalDecl" $ dropWhile (\t->tokenPos t/=endPos') toks2
-                            --get the remained tokens after the removed declaration.
-                            remainedToks=dropWhile isWhite toks2'
-                        in if remainedToks==[]
-                             then --the removed declaration is the last decl in the file.
-                                  (compressEndNewLns toks1'++ compressPreNewLns toks2')
-                             else if --remainedToks/=[], so no problem with head.
-                                    isIn (ghead "rmLocalDecl:isIn"  remainedToks)
-                                         || isComma (ghead "rmLocalDecl:isComma" remainedToks)
-                                        --There is a 'In' after the removed declaration.
-                                   then if isWhere whereOrLet
-                                           then deleteToks toks (tokenPos whereOrLet) endPos'
-                                           else deleteToks toks (tokenPos whereOrLet)
-                                                   $ tokenPos (ghead "rmLocalDecl:tokenPos" remainedToks)
-                                        --delete the decl and adjust the layout
-                                   else if isCloseSquareBracket (ghead "rmLocalDecl:isCloseSquareBracker" remainedToks) &&
-                                           (isBar.(ghead "rmLocalDecl:isBar")) (dropWhile isWhite (tail rvToks1))
-                                         then deleteToks toks (tokenPos((ghead "rmLocalDecl")
-                                                        (dropWhile isWhite (tail rvToks1)))) endPos'
-                                         else deleteToks toks (tokenPos whereOrLet) endPos'
-                        --there are more than one decls
-                   else  deleteToks toks startPos' endPos'
-         put ((toks',modified),others)  --Change the above endPos' to endPos will not delete the following comments.
-         return $ (decls \\ [decl])
--}
-
 -- ---------------------------------------------------------------------
-
 
 -- | Remove the type signature that defines the given identifier's
 -- type from the declaration list.
+-- TODO: return removed signature, with its tokens in a stash, as per rmDecl
 rmTypeSig :: (SYB.Data t) =>
          GHC.Name    -- ^ The identifier whose type signature is to be removed.
       -> t           -- ^ The declarations
       -> RefactGhc t -- ^ The result
 rmTypeSig pn t
-  = everywhereMStaged SYB.Renamer (SYB.mkM inDecls) t
+  = do
+     t' <- everywhereMStaged SYB.Renamer (SYB.mkM inSigs) t
+     return t'
   where
-   inDecls (sigs::[GHC.LSig GHC.Name])
+   inSigs (sigs::[GHC.LSig GHC.Name])
       | not $ emptyList (snd (break (definesTypeSig pn) sigs)) -- /=[]
-     = do toks <- fetchToks
+     = do
           let (decls1,decls2)= break (definesTypeSig pn) sigs
-              (toks',decls')=
+          let sspan = gfromJust "rmTypeSig" $ getSrcSpan $ ghead "rmTypeSig" decls2 
+          toks <- getToksForSpan sspan
+          liftIO $ putStrLn $ "rmTypeSig: fetched toks:" ++ (show toks) -- ++AZ++
+          let (toks',decls')=
                let sig@(GHC.L l (GHC.TypeSig names typ)) = ghead "rmTypeSig" decls2  -- as decls2/=[], no problem with head
                    (startPos,endPos) = getStartEndLoc sig
                in if length names > 1
@@ -3548,48 +3403,21 @@ rmTypeSig pn t
                           in (deleteToks toks startPos1 endPos1,(decls1++[newSig]++tail decls2))
                      else  ((deleteToks toks startPos endPos),(decls1++tail decls2)) 
                      -- else  error $ "rmTypeSig:(startPos,endPos)=" ++ (show (startPos,endPos)) -- ++AZ++
-          putToks toks' modified
+          liftIO $ putStrLn $ "rmTypeSig: about to replace tokens:" ++ (show toks') -- ++AZ++
+          case toks' of
+            [] -> do
+                   _ <- removeToksForSpan sspan
+                   return ()
+            _  -> do
+                   putToksForSpan sspan toks'
+                   return ()
           return decls'
-   inDecls x = return x
-
-
-{- ++ original ++
-
--- | Remove the type signature that defines the given identifier's type from the declaration list.
-{-rmTypeSig::(MonadState (([PosToken],Bool),t1) m)
-            => PName       -- ^ The identifier whose type signature is to be removed.
-            ->[HsDeclP]    -- ^ The declaration list
-            ->m [HsDeclP]  -- ^ The result -}
-
-rmTypeSig pn  t = applyTP (full_tdTP (idTP `adhocTP` inDecls)) t
-  where
-   inDecls (decls::[HsDeclP])
-      | snd (break (definesTypeSig pn) decls) /=[]
-     = do ((toks,_), others) <- get
-          let (decls1,decls2)= break  (definesTypeSig pn) decls
-              (toks',decls')=
-               let sig@(TiDecorate.Dec (HsTypeSig loc is c tp))=ghead "rmTypeSig" decls2  -- as decls2/=[], no problem with head
-                   (startPos,endPos)=getStartEndLoc toks sig
-               in if length is>1
-                     then let newSig=(TiDecorate.Dec (HsTypeSig loc (filter (\x-> (pNTtoPN x)/=pn) is) c tp))
-                              pnt = ghead "rmTypeSig" (filter (\x-> pNTtoPN x == pn) is)
-                              (startPos1, endPos1) = let (startPos1', endPos1') = getStartEndLoc toks pnt
-                                                     in if fromJust (elemIndex pnt is) >0
-                                                        then extendForwards toks startPos1' endPos1' isComma
-                                                        else extendBackwards toks startPos1' endPos1' isComma
-                          in (deleteToks toks startPos1 endPos1,(decls1++[newSig]++tail decls2))
-                     else  ((deleteToks toks startPos endPos),(decls1++tail decls2)) 
-          put ((toks',modified),others)
-          return decls'
-   inDecls x = return x
-
-
-++ original end ++ -}
+   inSigs x = return x
 
 -- ---------------------------------------------------------------------
 
 {-
------------------------------------------------------------------------------------------- 
+
 -- | Replace the name (and qualifier if specified) by a new name (and qualifier) in a PName.
 --   The function does not modify the token stream.
 replaceNameInPN::Maybe ModuleName    -- ^ The new qualifier
@@ -3686,10 +3514,11 @@ renamePN::(SYB.Data t)
    ->Bool                 -- ^ True means modifying the token stream as well.
    ->t                    -- ^ The syntax phrase
    ->RefactGhc t
-renamePN oldPN newName updateTokens t
+renamePN oldPN newName updateTokens t = do
   -- = error $ "renamePN: sspan=" ++ (GHC.showPpr sspan) -- ++AZ++
+  liftIO $ putStrLn $ "renamePN: (oldPN,newName)=" ++ (GHC.showPpr (oldPN,newName))
   -- Note: bottom-up traversal
-  = everywhereMStaged SYB.Renamer (SYB.mkM rename `SYB.extM` renameVar) t
+  everywhereMStaged SYB.Renamer (SYB.mkM rename `SYB.extM` renameVar) t
   where
     maybeSspan = getSrcSpan t
     sspan = gfromJust "renamePN" maybeSspan
@@ -3714,11 +3543,11 @@ renamePN oldPN newName updateTokens t
      = do if updateTokens
            then  do
                     -- toks <- fetchToks
-                    liftIO $ putStrLn $ "renamePN.worker: sspan=" ++ (GHC.showPpr sspan) -- ++AZ++ debug
+                    liftIO $ putStrLn $ "renamePN.worker: (sspan,newName)=" ++ (GHC.showPpr (sspan,newName)) -- ++AZ++ debug
+                    drawTokenTree "" -- ++AZ++ debug
                     toks <- getToksForSpan sspan
                     let toks'= replaceTokNoReAlign toks (row,col) (markToken $ newNameTok l newName)
-                    -- putToks toks' True
-                    _ <- putToksForSpan sspan toks'
+                    putToksForSpan sspan toks'
                     return newName
                     -- error $ "renamePN: (row,col,l,sspan),toks=" ++ (GHC.showPpr (row,col,l,sspan)) ++ (show toks) -- ++AZ++
            else return newName
@@ -3750,10 +3579,10 @@ autoRenameLocalVar:: (HsValBinds t)
                      ->GHC.Name     -- ^ The identifier.
                      ->t            -- ^ The syntax phrase.
                      -> RefactGhc t -- ^ The result.
-
-autoRenameLocalVar updateToks pn t
+autoRenameLocalVar modifyToks pn t = do
+  liftIO $ putStrLn $ "autoRenameLocalVar: (modifyToks,pn)=" ++ (GHC.showPpr (modifyToks,pn))
   -- = everywhereMStaged SYB.Renamer (SYB.mkM renameInMatch)
-  = do if isDeclaredIn pn t
+  if isDeclaredIn pn t
          then do t' <- worker t
                  return t'
          else do return t
@@ -3763,7 +3592,7 @@ autoRenameLocalVar updateToks pn t
                       let ds = hsVisibleNames pn (hsValBinds t)
                       let newNameStr=mkNewName (nameToString pn) (nub (f `union` d `union` ds)) 1
                       newName <- mkNewGhcName newNameStr
-                      if updateToks
+                      if modifyToks
                         then renamePN pn newName True t
                         else renamePN pn newName False t
 

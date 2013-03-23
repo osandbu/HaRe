@@ -6,7 +6,9 @@ module Language.Haskell.Refact.Utils.Monad
        , RefactSettings(..)
        , RefactState(..)
        , RefactModule(..)
+       , RefactStashId(..)
        , RefactFlags(..)
+       , StateStorage(..)
        -- , initRefactModule
        -- GHC monad stuff
        , RefactGhc
@@ -68,6 +70,7 @@ import Language.Haskell.Refact.Utils.TokenUtilsTypes
 import Language.Haskell.Refact.Utils.TypeSyn
 
 import Data.Tree
+import qualified Data.Map as Map
 
 -- ---------------------------------------------------------------------
 
@@ -75,11 +78,12 @@ data RefactSettings = RefSet
         { rsetImportPath :: [FilePath]
         } deriving (Show)
 
+data RefactStashId = Stash String deriving (Show,Eq,Ord)
+
 data RefactModule = RefMod
         { rsTypecheckedMod :: GHC.TypecheckedModule
         , rsOrigTokenStream :: [PosToken]  -- ^Original Token stream for the current module
-        -- , rsTokenStream     :: [PosToken]  -- ^Token stream for the current module, maybe modified
-        , rsTokenCache :: Tree Entry -- ^Token stream for the current module, maybe modified, in SrcSpan tree form
+        , rsTokenCache :: TokenCache -- ^Token stream for the current module, maybe modified, in SrcSpan tree form
         , rsStreamModified :: Bool     -- ^current module has updated the token stream
         }
 
@@ -93,8 +97,9 @@ data RefactState = RefSt
         { rsSettings :: RefactSettings -- ^Session level settings
         , rsUniqState :: Int -- ^ Current Unique creator value, incremented every time it is used
         , rsFlags :: RefactFlags -- ^ Flags for controlling generic traversals
-        -- The current module being refactored
-        , rsModule :: Maybe RefactModule
+        , rsStorage :: StateStorage -- ^Temporary storage of values
+                                    -- while refactoring takes place
+        , rsModule :: Maybe RefactModule -- ^The current module being refactored
         }
 
 -- |Result of parsing a Haskell source file. The first element in the
@@ -103,6 +108,14 @@ data RefactState = RefSt
 -- change as we learn more
 type ParseResult = GHC.TypecheckedModule
 
+-- |Provide some temporary storage while the refactoring is taking
+-- place
+data StateStorage = StorageNone
+                  | StorageBind (GHC.LHsBind GHC.Name)
+
+instance Show StateStorage where
+  show StorageNone        = "StorageNone"
+  show (StorageBind bind) = "(StorageBind " ++ (GHC.showPpr bind) ++ ")"
 
 -- ---------------------------------------------------------------------
 -- StateT and GhcT stack
@@ -127,6 +140,11 @@ instance (MonadState RefactState (GHC.GhcT (StateT RefactState IO))) where
 
 instance (MonadTrans GHC.GhcT) where
    lift = GHC.liftGhcT
+
+-- instance MonadPlus RefactGhc where
+instance MonadPlus (GHC.GhcT (StateT RefactState IO)) where
+  mzero = undefined
+  mplus = undefined
 
 {-
 instance MonadPlus (RefactGhc a) where

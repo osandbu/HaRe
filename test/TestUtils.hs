@@ -6,6 +6,7 @@ module TestUtils
        , toksFromState
        , defaultSettings
        , catchException
+       , mkTokenCache
        ) where
 
 
@@ -23,7 +24,11 @@ import Language.Haskell.Refact.Utils.LocUtils
 import Language.Haskell.Refact.Utils.Monad
 import Language.Haskell.Refact.Utils.MonadFunctions
 import Language.Haskell.Refact.Utils.TokenUtils
+import Language.Haskell.Refact.Utils.TokenUtilsTypes
 import Language.Haskell.Refact.Utils.TypeSyn
+
+import Data.Tree
+import qualified Data.Map as Map
 
 -- ---------------------------------------------------------------------
 
@@ -52,6 +57,7 @@ initialState = RefSt
   { rsSettings = RefSet ["./test/testdata/"]
   , rsUniqState = 1
   , rsFlags = RefFlags False
+  , rsStorage = StorageNone
   , rsModule = Nothing
   }
 
@@ -60,8 +66,13 @@ initialState = RefSt
 toksFromState :: RefactState -> [PosToken]
 toksFromState st =
   case (rsModule st) of
-    Just tm -> retrieveTokens $ rsTokenCache tm
+    Just tm -> retrieveTokens $ (tkCache $ rsTokenCache tm) Map.! mainTid
     Nothing -> []
+
+-- ---------------------------------------------------------------------
+
+mkTokenCache :: Tree Entry -> TokenCache
+mkTokenCache forest = TK (Map.fromList [((TId 0),forest)]) (TId 0)
 
 -- ---------------------------------------------------------------------
 
@@ -73,6 +84,7 @@ runRefactGhcState paramcomp = do
         { rsSettings = RefSet ["./test/testdata/"]
         , rsUniqState = 1
         , rsFlags = RefFlags False
+        , rsStorage = StorageNone
         , rsModule = Nothing
         }
   (r,s) <- runRefactGhc (initGhcSession >> paramcomp) initialState
