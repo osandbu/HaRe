@@ -60,6 +60,7 @@ module Language.Haskell.Refact.Utils.TypeUtils
     -- ,HasModName(hasModName), HasNameSpace(hasNameSpace)
     ,sameBind
     ,usedByRhs,UsedByRhs(..)
+    ,isDeclaredIn
 
     -- ** Modules and files
     -- ,clientModsAndFiles,serverModsAndFiles,isAnExistingMod
