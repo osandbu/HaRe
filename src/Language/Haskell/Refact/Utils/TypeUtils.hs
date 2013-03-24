@@ -1517,8 +1517,24 @@ instance HsValBinds (GHC.LHsExpr GHC.Name) where
   hsValBinds _                              = emptyValBinds
 
 -- ---------------------------------------------------------------------
+-- Added by Ole
+  
+instance HsValBinds HsModuleP where
+  hsValBinds (GHC.L _ (GHC.HsModule n e i decls dm h)) = undefined
+  hsValBinds _ = emptyValBinds
+
+{-
+instance HsValBinds HsDeclP where
+  hsValBinds (GHC.L _ (GHC.HsDecl id)) = undefined
+  hsValBinds _ = emptyValBinds
 
 
+instance HsValBinds HsExpP where
+  hsValBinds (GHC.HsExpr id) = undefined
+  hsValBinds _ = emptyValBinds
+-}
+
+-- ---------------------------------------------------------------------
 
 {-
 instance HsDecls HsMatchP where

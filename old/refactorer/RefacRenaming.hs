@@ -104,32 +104,32 @@ doRenaming oldPNT@(PNT oldPN Value loc) newName modName mod inscps exps env
      -- 1. The name is declared in a module(top level name)
      renameInMod (mod::HsModuleP)
         |isDeclaredIn oldPN mod=renameTopLevelVarName oldPNT newName modName inscps exps mod True True
-     renameInMod mod=mzero
+        | otherwise = mzero
 
      -- 2. The name is declared in a match
      renameInMatch (match::HsMatchP)
         |isDeclaredIn oldPN match=renameLocalVarName oldPN newName match
-     renameInMatch match=mzero
+        | otherwise = mzero
 
      -- 3. The name is declared in a pattern binding.
      renameInPattern (pat:: HsDeclP)
         |isDeclaredIn oldPN pat=renameLocalVarName oldPN newName pat
-     renameInPattern pat=mzero
+        | otherwise = mzero
  
      --4.The name is declared in a expression
      renameInExp (exp::HsExpP)
        |isDeclaredIn oldPN exp=renameLocalVarName oldPN newName exp
-     renameInExp exp=mzero
+       | otherwise = mzero
 
      --5.The name is declared in a case alternative
      renameInAlt (alt::HsAltP)
-       |isDeclaredIn oldPN alt=renameLocalVarName oldPN newName alt
-     renameInAlt alt=mzero
+       | isDeclaredIn oldPN alt=renameLocalVarName oldPN newName alt
+       | otherwise = mzero
 
      --6: The name is declared in a statment expression
      renameInStmts (stmts::HsExpP)
-       |isDeclaredIn oldPN stmts=renameLocalVarName oldPN newName stmts
-     renameInStmts stmts=mzero
+       | isDeclaredIn oldPN stmts=renameLocalVarName oldPN newName stmts
+       | otherwise =mzero
 
 
 doRenaming' oldPNT@(PNT oldPN _ _) newName parent mod fun exps env

@@ -74,46 +74,43 @@ rename' (GHC.L _ name) newName =
   reallyRename rs modName name newName
 
 reallyRename :: GHC.RenamedSource -> String -> GHC.Name -> String -> RefactGhc ()
-reallyRename rs modName name newNameStr = do
+reallyRename rs modName oldName newNameStr = do
   -- search for higher-level structures (e.g. function, ..)
-   everywhereMStaged SYB.Renamer (SYB.mkM renameInMod `SYB.extM`
-                                          renameInMatch `SYB.extM`
+  everywhereMStaged SYB.Renamer (SYB.mkM renameInMod `SYB.extM`
                                           renameInPattern `SYB.extM`
-                                          renameInExp `SYB.extM`
-                                          renameInAlt `SYB.extM`
-                                          renameInStmts) rs
-   return ()
-       where
-         -- if name inside structure, rename local variable
-         renameInMod mod | isDeclaredIn name mod = renameTopLevelVarName name newName mod
-         renameInMod mod = mzero
-         renameInMatch match | isDeclaredIn name match = renameLocalVarName newName match
-         renameInMatch _ = mzero
-         renameInPattern pat | isDeclaredIn name pat = renameLocalVarName newName pat
-         renameInPattern pat = mzero
-         renameInExp exp | isDeclaredIn name exp = renameLocalVarName name newName exp
-         renameInExp exp = mzero
-         renameInAlt alt | isDeclaredIn name alt = renameLocalVarName name newName alt
-         renameInAlt alt = mzero
-         renameInStmts stmts | isDeclaredIn name stmts = renameLocalVarName name newName stmts
-         renameInStmts stmts = mzero
-         
-         inExp :: (GHC.Located (GHC.HsExpr GHC.Name)) -> RefactGhc (GHC.Located (GHC.HsExpr GHC.Name))
-         inExp exp1@(GHC.L x (GHC.HsVar n2))
-          | GHC.nameUnique name == GHC.nameUnique n2
-           = do -- need to look at outer context
-               -- let d' = hsFDNamesFromInside exp1
-               --error $ show d'
-               newName <- mkNewGhcName newNameStr
-               let newExp = GHC.L x (GHC.HsVar newName)
-               update exp1 newExp exp1
-               return newExp
+                                          renameInExp) rs
+  return ()
+    where
+      -- if name inside structure, rename local variable
+      -- If the name is declared in a module
+      renameInMod (mod::HsModuleP) 
+        | isDeclaredIn oldName mod = renameTopLevelVarName oldName newNameStr mod
+        | otherwise = mzero
+      -- If the name is declared in a pattern
+      renameInPattern (pat::HsDeclP)
+        | isDeclaredIn oldName pat = renameLocalVarName modName oldName newNameStr pat
+        | otherwise = mzero
+      -- If the name is declared in an expression
+      renameInExp (exp::HsExpP)
+        | isDeclaredIn oldName exp = renameLocalVarName modName oldName newNameStr exp
+        | otherwise = mzero
+        
+      inExp :: (GHC.Located (GHC.HsExpr GHC.Name)) -> RefactGhc (GHC.Located (GHC.HsExpr GHC.Name))
+      inExp exp1@(GHC.L x (GHC.HsVar n2))
+        | GHC.nameUnique oldName == GHC.nameUnique n2
+        = do -- need to look at outer context
+           -- let d' = hsFDNamesFromInside exp1
+           --error $ show d'
+           newName <- mkNewGhcName newNameStr
+           let newExp = GHC.L x (GHC.HsVar newName)
+           update exp1 newExp exp1
+           return newExp
 
-         inExp e = return e
+      inExp e = return e
          
-         inPat :: (GHC.Located (GHC.Pat GHC.Name)) -> RefactGhc (GHC.Located (GHC.Pat GHC.Name))
-         inPat exp1@(GHC.L x (GHC.VarPat n2))
-           | GHC.nameUnique name == GHC.nameUnique n2
+      inPat :: (GHC.Located (GHC.Pat GHC.Name)) -> RefactGhc (GHC.Located (GHC.Pat GHC.Name))
+      inPat exp1@(GHC.L x (GHC.VarPat n2))
+           | GHC.nameUnique oldName == GHC.nameUnique n2
             = do -- need to look at outer context
                 let (f,d) = hsFDNamesFromInside exp1
                 error $ show (f,d)
@@ -122,11 +119,11 @@ reallyRename rs modName name newNameStr = do
                 update exp1 newExp exp1
                 return newExp
 
-         inPat e = return e
+      inPat e = return e
          
-         inFun :: (GHC.Located (GHC.HsBindLR GHC.Name GHC.Name)) -> RefactGhc (GHC.Located (GHC.HsBindLR GHC.Name GHC.Name))
-         inFun fun1@(GHC.L y (GHC.FunBind (GHC.L x n2) fm b c fvs id))
-            | GHC.nameUnique name == GHC.nameUnique n2
+      inFun :: (GHC.Located (GHC.HsBindLR GHC.Name GHC.Name)) -> RefactGhc (GHC.Located (GHC.HsBindLR GHC.Name GHC.Name))
+      inFun fun1@(GHC.L y (GHC.FunBind (GHC.L x n2) fm b c fvs id))
+            | GHC.nameUnique oldName == GHC.nameUnique n2
             = do
                 -- filter out patterns, left with qualified, remove qualified names
                 let decls = hsBinds rs
@@ -148,32 +145,28 @@ reallyRename rs modName name newNameStr = do
                   update fun1 newFun fun1
                   return newFun
 
-         inFun e = return e
+      inFun e = return e
           
           -- bind ((GHC.FunBind _ _ _ _ fvs _)::(GHC.HsBindLR GHC.Name GHC.Name)) = [fvs]
           -- bind ((GHC.PatBind _ _ _ fvs _)  ::(GHC.HsBindLR GHC.Name GHC.Name)) = [fvs]
           -- bind _ = []
 
-renameLocalVarName name newName t
+renameLocalVarName modName oldName newNameStr t
   = do
-      let decls = hsBinds rs
-          decls' = definingDeclsNames [n2] decls False False
-      let (f, d') = hsFreeAndDeclaredNames fun1
-      error $ prettyprint (decls')
+      let (f, d') = hsFreeAndDeclaredNames t
       let modLength = length modName
          -- filter out names that start with modName followed by a period (i.e. "Ole.")
           d = filter (\x -> take (modLength+1) x /= modName ++ ".") d'
-          global'' = hsVisibleNames fun1 rs
+          global'' = hsVisibleNames t t
           global' = filter (\x -> take (modLength+1) x == modName ++ ".") global''
           global = map (drop (modLength+1)) global'
           variables = d ++ global
       if newNameStr `elem` variables then 
        error (newNameStr ++ " is already defined.") 
       else do 
+       -- context-dependent operation
        newName <- mkNewGhcName newNameStr
-       let newFun = GHC.L y (GHC.FunBind (GHC.L x newName) fm b c fvs id)
-       update fun1 newFun fun1
-       return newFun
+       renamePN oldName newName True t
 
 renameTopLevelVarName name newName t = do
       undefined
