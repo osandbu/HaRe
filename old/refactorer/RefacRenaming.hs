@@ -104,7 +104,7 @@ doRenaming oldPNT@(PNT oldPN Value loc) newName modName mod inscps exps env
      -- 1. The name is declared in a module(top level name)
      renameInMod (mod::HsModuleP)
         |isDeclaredIn oldPN mod=renameTopLevelVarName oldPNT newName modName inscps exps mod True True
-        | otherwise = mzero
+        =mzero
 
      -- 2. The name is declared in a match
      renameInMatch (match::HsMatchP)
