@@ -947,6 +947,74 @@ spec = do
 
   -- -------------------------------------------------------------------
 
+  describe "extendBackwards" $ do
+    it "needs a test or two" $ do
+      (_t, toks) <- parsedFileTypeSigs
+      (show $ take 12 toks) `shouldBe` 
+               "[((((1,1),(1,7)),ITmodule),\"module\"),"++
+               "((((1,8),(1,16)),ITconid \"TypeSigs\"),\"TypeSigs\"),"++
+               "((((1,17),(1,22)),ITwhere),\"where\"),"++
+               "((((3,1),(3,1)),ITvocurly),\"\"),"++
+               "((((3,1),(3,3)),ITvarid \"sq\"),\"sq\"),"++
+               "((((3,3),(3,4)),ITcomma),\",\"),"++
+               "((((3,4),(3,14)),ITvarid \"anotherFun\"),\"anotherFun\"),"++
+               "((((3,15),(3,17)),ITdcolon),\"::\"),"++
+               "((((3,18),(3,21)),ITconid \"Int\"),\"Int\"),"++
+               "((((3,22),(3,24)),ITrarrow),\"->\"),"++
+               "((((3,25),(3,28)),ITconid \"Int\"),\"Int\"),"++
+               "((((4,1),(4,1)),ITsemi),\"\")]"
+      let (_,middle,_) = splitToks ((3,1),(3,28)) toks
+      (show middle) `shouldBe` 
+               "[((((3,1),(3,1)),ITvocurly),\"\"),"++
+               "((((3,1),(3,3)),ITvarid \"sq\"),\"sq\"),"++
+               "((((3,3),(3,4)),ITcomma),\",\"),"++
+               "((((3,4),(3,14)),ITvarid \"anotherFun\"),\"anotherFun\"),"++
+               "((((3,15),(3,17)),ITdcolon),\"::\"),"++
+               "((((3,18),(3,21)),ITconid \"Int\"),\"Int\"),"++
+               "((((3,22),(3,24)),ITrarrow),\"->\"),"++
+               "((((3,25),(3,28)),ITconid \"Int\"),\"Int\")]"
+
+      -- (startPos1', endPos1'):((3,1),(3,3))
+      -- (sspan):test/testdata/TypeUtils/TypeSigs.hs:3:1-27
+      let t2 = extendBackwards middle ((3,4),(3,14)) isComma
+      (show t2) `shouldBe` "((3,3),(3,14))"
+
+  -- -------------------------------------------------------------------
+
+  describe "extendForwards" $ do
+    it "needs a test or two" $ do
+      (_t, toks) <- parsedFileTypeSigs
+      (show $ take 12 toks) `shouldBe` 
+               "[((((1,1),(1,7)),ITmodule),\"module\"),"++
+               "((((1,8),(1,16)),ITconid \"TypeSigs\"),\"TypeSigs\"),"++
+               "((((1,17),(1,22)),ITwhere),\"where\"),"++
+               "((((3,1),(3,1)),ITvocurly),\"\"),"++
+               "((((3,1),(3,3)),ITvarid \"sq\"),\"sq\"),"++
+               "((((3,3),(3,4)),ITcomma),\",\"),"++
+               "((((3,4),(3,14)),ITvarid \"anotherFun\"),\"anotherFun\"),"++
+               "((((3,15),(3,17)),ITdcolon),\"::\"),"++
+               "((((3,18),(3,21)),ITconid \"Int\"),\"Int\"),"++
+               "((((3,22),(3,24)),ITrarrow),\"->\"),"++
+               "((((3,25),(3,28)),ITconid \"Int\"),\"Int\"),"++
+               "((((4,1),(4,1)),ITsemi),\"\")]"
+      let (_,middle,_) = splitToks ((3,1),(3,28)) toks
+      (show middle) `shouldBe` 
+               "[((((3,1),(3,1)),ITvocurly),\"\"),"++
+               "((((3,1),(3,3)),ITvarid \"sq\"),\"sq\"),"++
+               "((((3,3),(3,4)),ITcomma),\",\"),"++
+               "((((3,4),(3,14)),ITvarid \"anotherFun\"),\"anotherFun\"),"++
+               "((((3,15),(3,17)),ITdcolon),\"::\"),"++
+               "((((3,18),(3,21)),ITconid \"Int\"),\"Int\"),"++
+               "((((3,22),(3,24)),ITrarrow),\"->\"),"++
+               "((((3,25),(3,28)),ITconid \"Int\"),\"Int\")]"
+
+      -- (startPos1', endPos1'):((3,1),(3,3))`
+      -- (sspan):test/testdata/TypeUtils/TypeSigs.hs:3:1-27
+      let t2 = extendForwards middle ((3,1),(3,3)) isComma
+      (show t2) `shouldBe` "((3,1),(3,4))"
+
+  -- -------------------------------------------------------------------
+
   describe "foo" $ do
     it "needs a test or two" $ do
       pending "write this test"
@@ -1048,6 +1116,15 @@ tokenTestFileName = GHC.mkFastString "./test/testdata/TokenTest.hs"
 parsedFileTokenTestGhc :: IO (ParseResult,[PosToken])
 parsedFileTokenTestGhc = parsedFileGhc "./test/testdata/TokenTest.hs"
 
+-- ----------------------------------------------------
+
+typeSigsFileName :: GHC.FastString
+typeSigsFileName = GHC.mkFastString "./test/testdata/TypeUtils/TypeSigs.hs"
+
+parsedFileTypeSigs :: IO (ParseResult, [PosToken])
+parsedFileTypeSigs = parsedFileGhc "./test/testdata/TypeUtils/TypeSigs.hs"
+
 -- -----------
+
 
 -- EOF

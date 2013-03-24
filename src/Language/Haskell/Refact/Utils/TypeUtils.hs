@@ -3292,25 +3292,28 @@ duplicateDecl decls sigs n newFunName
 -- parameter is True) that defines the given identifier from the
 -- declaration list.
 rmDecl:: (SYB.Data t)
-        =>GHC.Name     -- ^ The identifier whose definition is to be removed.
-        ->Bool         -- ^ True means including the type signature.
-        ->t            -- ^ The declaration list.
-        -> RefactGhc (t,GHC.LHsBind GHC.Name) -- ^ The result, and the
-                                              -- removed declaration,
-                                              -- with SrcSpans
-                                              -- adjusted to reflect
-                                              -- the stashed tokens
+    =>GHC.Name     -- ^ The identifier whose definition is to be removed.
+    ->Bool         -- ^ True means including the type signature.
+    ->t            -- ^ The declaration list.
+    -> RefactGhc
+        (t,                        -- ^ The result
+        GHC.LHsBind GHC.Name,      -- ^ and the removed declaration,
+                                   -- with SrcSpans adjusted to
+                                   -- reflect the stashed
+                                   -- tokens
+        Maybe (GHC.LSig GHC.Name)) -- ^ and the possibly removed siganture
 rmDecl pn incSig t = do
   liftIO $ putStr $ "rmDecl:(pn,incSig)= " ++ (GHC.showPpr (pn,incSig)) -- ++AZ++
   setStateStorage StorageNone
   t'  <- everywhereMStaged SYB.Renamer (SYB.mkM inDecls) t
-  t'' <- if incSig then rmTypeSig pn t'
-                   else return t'
+  (t'',sig') <- if incSig
+                  then rmTypeSig pn t'
+                  else return (t', Nothing)
   storage <- getStateStorage
   let decl' = case storage of
                 StorageBind bind -> bind
                 x                -> error $ "rmDecl: unexpected value in StateStorage:" ++ (show x)
-  return (t'',decl')
+  return (t'',decl',sig')
   where
     inDecls (decls::[GHC.LHsBind GHC.Name])
       | not $ emptyList (snd (break (defines pn) decls)) -- /=[]
@@ -3390,45 +3393,68 @@ rmDecl pn incSig t = do
 
 -- | Remove the type signature that defines the given identifier's
 -- type from the declaration list.
--- TODO: return removed signature, with its tokens in a stash, as per rmDecl
 rmTypeSig :: (SYB.Data t) =>
          GHC.Name    -- ^ The identifier whose type signature is to be removed.
       -> t           -- ^ The declarations
-      -> RefactGhc t -- ^ The result
+      -> RefactGhc (t,Maybe (GHC.LSig GHC.Name))
+                     -- ^ The result and removed signature, if there
+                     -- was one
 rmTypeSig pn t
   = do
+     setStateStorage StorageNone
      t' <- everywhereMStaged SYB.Renamer (SYB.mkM inSigs) t
-     return t'
+     storage <- getStateStorage
+     let sig' = case storage of
+                  StorageSig sig -> Just sig
+                  StorageNone    -> Nothing
+                  x -> error $ "rmTypeSig: unexpected value in StateStorage:" ++ (show x)
+     return (t',sig')
   where
    inSigs (sigs::[GHC.LSig GHC.Name])
       | not $ emptyList (snd (break (definesTypeSig pn) sigs)) -- /=[]
      = do
-          let (decls1,decls2)= break (definesTypeSig pn) sigs
-          let sspan = gfromJust "rmTypeSig" $ getSrcSpan $ ghead "rmTypeSig" decls2 
-          toks <- getToksForSpan sspan
-          liftIO $ putStrLn $ "rmTypeSig: fetched toks:" ++ (show toks) -- ++AZ++
-          let (toks',decls')=
-               let sig@(GHC.L l (GHC.TypeSig names typ)) = ghead "rmTypeSig" decls2  -- as decls2/=[], no problem with head
-                   (startPos,endPos) = getStartEndLoc sig
-               in if length names > 1
-                     then let newSig=(GHC.L l (GHC.TypeSig (filter (\(GHC.L _ x) -> x /= pn) names) typ))
-                              pnt = ghead "rmTypeSig" (filter (\(GHC.L _ x) -> x == pn) names)
-                              (startPos1, endPos1) = let (startPos1', endPos1') = getStartEndLoc pnt
-                                                     in if gfromJust "rmTypeSig" (elemIndex pnt names) >0
-                                                        then extendForwards  toks startPos1' endPos1' isComma
-                                                        else extendBackwards toks startPos1' endPos1' isComma
-                          in (deleteToks toks startPos1 endPos1,(decls1++[newSig]++tail decls2))
-                     else  ((deleteToks toks startPos endPos),(decls1++tail decls2)) 
-                     -- else  error $ "rmTypeSig:(startPos,endPos)=" ++ (show (startPos,endPos)) -- ++AZ++
-          liftIO $ putStrLn $ "rmTypeSig: about to replace tokens:" ++ (show toks') -- ++AZ++
-          case toks' of
-            [] -> do
-                   _ <- removeToksForSpan sspan
-                   return ()
-            _  -> do
-                   putToksForSpan sspan toks'
-                   return ()
-          return decls'
+         let (decls1,decls2)= break (definesTypeSig pn) sigs
+         let sig@(GHC.L sspan (GHC.TypeSig names typ)) = ghead "rmTypeSig" decls2
+         if length names > 1
+             then do
+                 -- We have the following cases
+                 -- [pn,x..], [..x,pn,y..], [..x,pn]
+                 -- We must handle the commas correctly in
+                 -- all cases
+                 -- so [pn,x..] : take front comma
+                 --    [..x,pn,y..] : take either front or back comma,
+                 --                   but only one
+                 --    [..x,pn] : take back comma
+                 let newSig=(GHC.L sspan (GHC.TypeSig (filter (\(GHC.L _ x) -> x /= pn) names) typ))
+
+                 toks <- getToksForSpan sspan
+                 liftIO $ putStrLn $ "rmTypeSig: fetched toks:" ++ (show toks) -- ++AZ++
+                 let pnt = ghead "rmTypeSig" (filter (\(GHC.L _ x) -> x == pn) names)
+                     (startPos1, endPos1) =
+                         let (startPos1', endPos1') = getStartEndLoc pnt
+                             in if gfromJust "rmTypeSig" (elemIndex pnt names) == 0
+                                    then extendForwards  toks (startPos1',endPos1') isComma
+                                    else extendBackwards toks (startPos1',endPos1') isComma
+                     toks' = deleteToks toks startPos1 endPos1
+                 putToksForSpan sspan toks'
+
+                 -- Construct the old signature, by keeping the
+                 -- signature part but discarding the other names
+                 let oldSig = (GHC.L sspan (GHC.TypeSig [pnt] typ))
+                 sig'@(GHC.L sspan' _) <- syncDeclToLatestStash oldSig
+                 let typeLoc = extendBackwards toks (getStartEndLoc typ) isDoubleColon
+                 let (_,typTok,_) = splitToks typeLoc toks
+                 let (_,pntTok,_) = splitToks (getStartEndLoc pnt) toks
+                 putToksForSpan sspan' (pntTok ++ typTok)
+                 setStateStorage (StorageSig sig')
+
+
+                 return (decls1++[newSig]++tail decls2)
+             else do
+                 removeToksForSpan sspan
+                 sig' <- syncDeclToLatestStash sig
+                 setStateStorage (StorageSig sig')
+                 return (decls1++tail decls2)
    inSigs x = return x
 
 -- ---------------------------------------------------------------------
