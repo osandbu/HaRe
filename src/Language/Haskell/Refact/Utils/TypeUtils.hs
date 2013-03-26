@@ -1744,6 +1744,7 @@ instance FindEntity (GHC.Located (GHC.HsDecl GHC.Name)) where
     worker _ = Nothing
 
 
+{-
 instance FindEntity (GHC.HsBind GHC.Name) where
   findEntity b t = fromMaybe False res
    where
@@ -1753,6 +1754,7 @@ instance FindEntity (GHC.HsBind GHC.Name) where
       -- | e == expr = Just True
       | sameOccurrence b bind = Just True
     worker _ = Nothing
+    -}
 
 -- ---------------------------------------------------------------------
 

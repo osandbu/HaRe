@@ -87,7 +87,7 @@ reallyRename rs modName oldName newNameStr = do
         | isDeclaredIn oldName mod = renameTopLevelVarName oldName newNameStr mod
         | otherwise = mzero-}
       -- If the name is declared in a pattern
-      renameInPattern (pat::GHC.HsBind GHC.Name)
+      renameInPattern (pat::GHC.Located (GHC.HsBind GHC.Name))
         | isDeclaredIn oldName pat = renameLocalVarName modName oldName newNameStr pat
         | otherwise = mzero
       -- If the name is declared in an expression
