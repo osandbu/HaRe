@@ -75,7 +75,7 @@ rename' (GHC.L _ name) newName =
 
 reallyRename :: GHC.RenamedSource -> String -> GHC.Name -> String -> RefactGhc ()
 reallyRename rs modName oldName newNameStr = do
-  -- search for higher-level structures (e.g. function, ..)
+  -- search for higher-level structures
   everywhereMStaged SYB.Renamer (SYB.mkM --renameInMod `SYB.extM`
                                           renameInPattern) rs-- `SYB.extM`
                                           --renameInExp) rs
