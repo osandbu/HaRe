@@ -76,24 +76,25 @@ rename' (GHC.L _ name) newName =
 reallyRename :: GHC.RenamedSource -> String -> GHC.Name -> String -> RefactGhc ()
 reallyRename rs modName oldName newNameStr = do
   -- search for higher-level structures (e.g. function, ..)
-  everywhereMStaged SYB.Renamer (SYB.mkM renameInMod `SYB.extM`
-                                          renameInPattern `SYB.extM`
-                                          renameInExp) rs
+  everywhereMStaged SYB.Renamer (SYB.mkM --renameInMod `SYB.extM`
+                                          renameInPattern) rs-- `SYB.extM`
+                                          --renameInExp) rs
   return ()
     where
       -- if name inside structure, rename local variable
       -- If the name is declared in a module
-      renameInMod (mod::HsModuleP) 
+{-      renameInMod (mod::HsModuleP) 
         | isDeclaredIn oldName mod = renameTopLevelVarName oldName newNameStr mod
-        | otherwise = mzero
+        | otherwise = mzero-}
       -- If the name is declared in a pattern
-      renameInPattern (pat::HsDeclP)
+      renameInPattern (pat::GHC.HsBind GHC.Name)
         | isDeclaredIn oldName pat = renameLocalVarName modName oldName newNameStr pat
         | otherwise = mzero
       -- If the name is declared in an expression
-      renameInExp (exp::HsExpP)
+{-      renameInExp (exp::HsExpP)
         | isDeclaredIn oldName exp = renameLocalVarName modName oldName newNameStr exp
         | otherwise = mzero
+        -}
         
       inExp :: (GHC.Located (GHC.HsExpr GHC.Name)) -> RefactGhc (GHC.Located (GHC.HsExpr GHC.Name))
       inExp exp1@(GHC.L x (GHC.HsVar n2))

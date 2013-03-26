@@ -1524,10 +1524,11 @@ instance HsValBinds HsModuleP where
   hsValBinds _ = emptyValBinds
 
 {-
-instance HsValBinds HsDeclP where
-  hsValBinds (GHC.L _ (GHC.HsDecl id)) = undefined
+-- patterns
+instance HsValBinds (GHC.LHsBind GHC.RdrName) where
+  hsValBinds (GHC.L _ (GHC.PatBind _ rhs _ _ _))       = hsValBinds rhs
   hsValBinds _ = emptyValBinds
-
+  
 
 instance HsValBinds HsExpP where
   hsValBinds (GHC.HsExpr id) = undefined
@@ -1740,6 +1741,17 @@ instance FindEntity (GHC.Located (GHC.HsDecl GHC.Name)) where
     worker (decl::(GHC.Located (GHC.HsDecl GHC.Name)))
       -- | e == expr = Just True
       | sameOccurrence d decl = Just True
+    worker _ = Nothing
+
+
+instance FindEntity (GHC.HsBind GHC.Name) where
+  findEntity b t = fromMaybe False res
+   where
+    res = somethingStaged SYB.Parser Nothing (Nothing `SYB.mkQ` worker) t
+
+    worker (bind::(GHC.HsBind GHC.Name))
+      -- | e == expr = Just True
+      | sameOccurrence b bind = Just True
     worker _ = Nothing
 
 -- ---------------------------------------------------------------------
