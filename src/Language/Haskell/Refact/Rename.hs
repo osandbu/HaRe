@@ -9,7 +9,6 @@ import qualified DynFlags              as GHC
 import qualified Outputable            as GHC
 import qualified MonadUtils            as GHC
 import qualified Name                  as GHC
-import qualified RdrName               as GHC
 import qualified OccName               as GHC
 import qualified Unique                as GHC
 import qualified FastString            as GHC
@@ -76,25 +75,27 @@ rename' (GHC.L _ name) newName =
 reallyRename :: GHC.RenamedSource -> String -> GHC.Name -> String -> RefactGhc ()
 reallyRename rs modName oldName newNameStr = do
   -- search for higher-level structures
-  everywhereMStaged SYB.Renamer (SYB.mkM --renameInMod `SYB.extM`
-                                          renameInPattern) rs-- `SYB.extM`
-                                          --renameInExp) rs
+  everywhereMStaged SYB.Renamer (SYB.mkM renameInMod `SYB.extM`
+                                          renameInPattern `SYB.extM`
+                                          renameInMatch `SYB.extM`
+                                          renameInExp) rs
   return ()
     where
-      -- if name inside structure, rename local variable
-      -- If the name is declared in a module
-{-      renameInMod (mod::HsModuleP) 
+      -- If the name is declared at module-level
+      renameInMod (mod::GHC.Located (GHC.HsModule GHC.Name)) 
         | isDeclaredIn oldName mod = renameTopLevelVarName oldName newNameStr mod
-        | otherwise = mzero-}
+        | otherwise = mzero
       -- If the name is declared in a pattern
       renameInPattern (pat::GHC.Located (GHC.HsBind GHC.Name))
         | isDeclaredIn oldName pat = renameLocalVarName modName oldName newNameStr pat
         | otherwise = mzero
       -- If the name is declared in an expression
-{-      renameInExp (exp::HsExpP)
+      renameInExp (exp::GHC.Located (GHC.HsExpr GHC.Name))
         | isDeclaredIn oldName exp = renameLocalVarName modName oldName newNameStr exp
         | otherwise = mzero
-        -}
+      renameInMatch (match :: GHC.Located (GHC.Match GHC.Name))
+        | isDeclaredIn oldName match = renameLocalVarName modName oldName newNameStr
+        | otherwise = mzero
         
       inExp :: (GHC.Located (GHC.HsExpr GHC.Name)) -> RefactGhc (GHC.Located (GHC.HsExpr GHC.Name))
       inExp exp1@(GHC.L x (GHC.HsVar n2))

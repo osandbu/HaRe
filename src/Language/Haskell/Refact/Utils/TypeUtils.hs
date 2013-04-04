@@ -1433,7 +1433,7 @@ instance HsValBinds (GHC.MatchGroup GHC.Name) where
 -- ---------------------------------------------------------------------
 
 instance HsValBinds [GHC.LMatch GHC.Name] where
-  hsValBinds ms = unionBinds $ map (\m -> hsValBinds $ GHC.unLoc m) ms
+  hsValBinds ms = unionBinds $ map (hsValBinds . GHC.unLoc) ms
 
   replaceValBinds [] _        = error "empty match list in replaceValBinds [GHC.LMatch GHC.Name]"
   replaceValBinds ms newBinds = (replaceValBinds (ghead "replaceValBinds" ms) newBinds):(tail ms)
@@ -1517,23 +1517,19 @@ instance HsValBinds (GHC.LHsExpr GHC.Name) where
   hsValBinds _                              = emptyValBinds
 
 -- ---------------------------------------------------------------------
--- Added by Ole
-  
-instance HsValBinds HsModuleP where
-  hsValBinds (GHC.L _ (GHC.HsModule n e i decls dm h)) = undefined
-  hsValBinds _ = emptyValBinds
-
-{-
--- patterns
-instance HsValBinds (GHC.LHsBind GHC.RdrName) where
-  hsValBinds (GHC.L _ (GHC.PatBind _ rhs _ _ _))       = hsValBinds rhs
-  hsValBinds _ = emptyValBinds
   
 
-instance HsValBinds HsExpP where
-  hsValBinds (GHC.HsExpr id) = undefined
+instance HsValBinds (GHC.Located (GHC.HsModule GHC.Name)) where
+  hsValBinds (GHC.L _ (GHC.HsModule n e i decls dm h)) = hsValBinds decls
   hsValBinds _ = emptyValBinds
--}
+
+instance HsValBinds [GHC.Located (GHC.HsDecl GHC.Name)] where
+  hsValBinds xs = undefined--unionBinds $ map hsValBinds xs
+  hsValBinds _ = emptyValBinds
+
+instance HsValBinds (GHC.Located (GHC.HsDecl GHC.Name)) where
+  hsValBinds xs = undefined--GHC.ValBindsIn (GHC.listToBag xs) []
+  hsValBinds _ = emptyValBinds
 
 -- ---------------------------------------------------------------------
 
