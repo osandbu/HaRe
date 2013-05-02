@@ -76,26 +76,30 @@ reallyRename :: GHC.RenamedSource -> String -> GHC.Name -> String -> RefactGhc (
 reallyRename rs modName oldName newNameStr = do
   -- search for higher-level structures
   everywhereMStaged SYB.Renamer (SYB.mkM renameInMod `SYB.extM`
-                                          renameInPattern `SYB.extM`
-                                          renameInMatch `SYB.extM`
+--                                          renameInPattern `SYB.extM`
+--                                          renameInMatch `SYB.extM`
+                                          renameInDecl `SYB.extM`
                                           renameInExp) rs
   return ()
     where
       -- If the name is declared at module-level
       renameInMod (mod::GHC.Located (GHC.HsModule GHC.Name)) 
-        | isDeclaredIn oldName mod = renameTopLevelVarName oldName newNameStr mod
-        | otherwise = mzero
+        | isDeclaredIn oldName mod = renameTopLevelVarName modName oldName newNameStr mod rs
+        | otherwise = return mod
       -- If the name is declared in a pattern
-      renameInPattern (pat::GHC.Located (GHC.HsBind GHC.Name))
-        | isDeclaredIn oldName pat = renameLocalVarName modName oldName newNameStr pat
-        | otherwise = mzero
+--      renameInPattern (pat::GHC.Located (GHC.HsBind GHC.Name))
+--        | isDeclaredIn oldName pat = renameLocalVarName modName oldName newNameStr pat
+--        | otherwise = return pat
       -- If the name is declared in an expression
       renameInExp (exp::GHC.Located (GHC.HsExpr GHC.Name))
         | isDeclaredIn oldName exp = renameLocalVarName modName oldName newNameStr exp
-        | otherwise = mzero
-      renameInMatch (match :: GHC.Located (GHC.Match GHC.Name))
-        | isDeclaredIn oldName match = renameLocalVarName modName oldName newNameStr
-        | otherwise = mzero
+        | otherwise = return exp
+--      renameInMatch (match :: GHC.Located (GHC.Match GHC.Name))
+--        | isDeclaredIn oldName match = renameLocalVarName modName oldName newNameStr match
+--        | otherwise = return match
+      renameInDecl (decl :: GHC.Located (GHC.HsDecl GHC.Name))
+        | isDeclaredIn oldName decl = renameLocalVarName modName oldName newNameStr decl
+        | otherwise = return decl
         
       inExp :: (GHC.Located (GHC.HsExpr GHC.Name)) -> RefactGhc (GHC.Located (GHC.HsExpr GHC.Name))
       inExp exp1@(GHC.L x (GHC.HsVar n2))
@@ -170,8 +174,21 @@ renameLocalVarName modName oldName newNameStr t
        newName <- mkNewGhcName newNameStr
        renamePN oldName newName True t
 
-renameTopLevelVarName name newName t = do
-      undefined
+renameTopLevelVarName modName oldName newNameStr t rs = do
+  -- filter out patterns, left with qualified, remove qualified names
+  let (f, d') = hsFreeAndDeclaredNames t
+  let modLength = length modName
+      -- filter out names that start with modName followed by a period (i.e. "Ole.")
+      d = filter (\x -> take (modLength+1) x /= modName ++ ".") d'
+      global'' = hsVisibleNames t rs
+      global' = filter (\x -> take (modLength+1) x == modName ++ ".") global''
+      global = map (drop (modLength+1)) global'
+      variables = d ++ global
+  if newNameStr `elem` variables then 
+    error (newNameStr ++ " is already defined.") 
+  else do 
+    newName <- mkNewGhcName newNameStr
+    renamePN oldName newName True t
 
 prettyprint2 :: (GHC.Outputable a) => a -> String
 prettyprint2 x = GHC.showSDoc $ GHC.ppr x
