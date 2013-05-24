@@ -1520,7 +1520,7 @@ instance HsValBinds (GHC.LHsExpr GHC.Name) where
   
 
 instance HsValBinds (GHC.Located (GHC.HsModule GHC.Name)) where
-  hsValBinds (GHC.L _ (GHC.HsModule n e i decls dm h)) = hsValBinds decls
+  hsValBinds (GHC.L _ (GHC.HsModule n e i decls dm h)) = error "OOOOOO"--hsValBinds decls
   hsValBinds _ = emptyValBinds
 
 instance HsValBinds [GHC.Located (GHC.HsDecl GHC.Name)] where
@@ -1738,6 +1738,12 @@ instance FindEntity (GHC.Located (GHC.HsDecl GHC.Name)) where
       -- | e == expr = Just True
       | sameOccurrence d decl = Just True
     worker _ = Nothing
+
+instance FindEntity (GHC.HsGroup GHC.Name) where
+  findEntity (GHC.HsGroup v _ _ _ _ _ _ _ _ _ _ _) t =
+    or $ map (\x-> findEntity x t) binds
+   where
+    binds = hsBinds v
 
 -- ---------------------------------------------------------------------
 
@@ -3567,6 +3573,8 @@ renamePN oldPN newName updateTokens t = do
     rename  pnt@(GHC.L l n)
      | (GHC.nameUnique n == GHC.nameUnique oldPN)
      = do let (row,col) = (getLocatedStart pnt)
+          -- find row,col, newname
+          -- error $ show (row , col)
           newName <- worker (row,col) l n
           return (GHC.L l newName)
     rename x = return x

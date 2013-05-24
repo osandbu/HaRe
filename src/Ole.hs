@@ -1,20 +1,20 @@
 module Ole where
 
-{-f x = x + 1
+f x = x + 1
 -- function application
 g x = f x
 
 -- left section
 lSec f = (f+)
 -- right section
-rSec f = (+f) -}
+rSec f = (+f)
 
 -- let expression with renamable variable on left- and right-hand-side (5)
 h b = 
           let f = b in
           bob b + 42
              where bob x = 6
-{-
+
 -- lambda expression (1)
 lam = \x -> x + x
 
@@ -37,4 +37,4 @@ wher x = x + a
 
 -- data declaration (7)
 data Foo = Bar Int
-  deriving Show-}
+  deriving Show

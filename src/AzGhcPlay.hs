@@ -82,13 +82,13 @@ s2 = GhcSwapArgs.swapArgs ["./old/refactorer/B.hs","6","1"]
 -}
 
 -- added by Chris for renaming
-r1 = GhcRefacRename.rename ["./Ole.hs", "Cas", "18", "1"]  -- lambda
-r2 = GhcRefacRename.rename ["./Ole.hs", "j", "21", "1"] -- case of
-r3 = GhcRefacRename.rename ["./Ole.hs", "x", "26", "19"] -- if else / par
+r1 = GhcRefacRename.rename ["./Ole.hs", "Cas", "19", "1"]  -- lambda
+r2 = GhcRefacRename.rename ["./Ole.hs", "j", "3", "1"] -- case of
+r3 = GhcRefacRename.rename ["./Ole.hs", "x", "27", "19"] -- if else / par
 r4 = GhcRefacRename.rename ["./Ole.hs", "kkk", "30", "1"] -- pattern binding
 r5 = GhcRefacRename.rename ["./Ole.hs", "bob", "14", "15"] -- let
-r6 = GhcRefacRename.rename ["./Ole.hs", "a", "33", "1"] -- where clause
-r7 = GhcRefacRename.rename ["./Ole.hs", "newBlah", "38", "6"] -- data declaration
+r6 = GhcRefacRename.rename ["./Ole.hs", "a", "34", "1"] -- where clause
+r7 = GhcRefacRename.rename ["./Ole.hs", "FooBar", "39", "6"] -- data declaration
 
 p1 = 
   do

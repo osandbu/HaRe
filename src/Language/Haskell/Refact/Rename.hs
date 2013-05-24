@@ -69,36 +69,41 @@ rename' (GHC.L _ name) newName =
   if isUpper (head newName) then error "Variables cannot start with an uppercase character" else do
   rs <- getRefactRenamed
   parsed <- getRefactParsed
-  let (Just (_,modName)) = getModuleName parsed
+  let (Just (_,modName)) = getModuleName parsed 
+  liftIO $ putStrLn  (SYB.showData SYB.Renamer 0 rs)
   reallyRename rs modName name newName
 
 reallyRename :: GHC.RenamedSource -> String -> GHC.Name -> String -> RefactGhc ()
 reallyRename rs modName oldName newNameStr = do
   -- search for higher-level structures
-  everywhereMStaged SYB.Renamer (SYB.mkM renameInMod `SYB.extM`
+  everywhereMStaged SYB.Renamer (SYB.mkM renameInGroup `SYB.extM`
 --                                          renameInPattern `SYB.extM`
 --                                          renameInMatch `SYB.extM`
                                           renameInDecl `SYB.extM`
-                                          renameInExp) rs
+                                          renameInExp
+                                          ) rs
   return ()
     where
       -- If the name is declared at module-level
-      renameInMod (mod::GHC.Located (GHC.HsModule GHC.Name)) 
-        | isDeclaredIn oldName mod = renameTopLevelVarName modName oldName newNameStr mod rs
-        | otherwise = return mod
+      renameInGroup (group::GHC.HsGroup GHC.Name) 
+        | isDeclaredIn oldName group = do
+          GHC.trace "renameInGroup" $ renameTopLevelVarName modName oldName newNameStr group rs
+        | otherwise = error "OTHERWISE"--return mod
       -- If the name is declared in a pattern
 --      renameInPattern (pat::GHC.Located (GHC.HsBind GHC.Name))
 --        | isDeclaredIn oldName pat = renameLocalVarName modName oldName newNameStr pat
 --        | otherwise = return pat
       -- If the name is declared in an expression
       renameInExp (exp::GHC.Located (GHC.HsExpr GHC.Name))
-        | isDeclaredIn oldName exp = renameLocalVarName modName oldName newNameStr exp
+        | isDeclaredIn oldName exp =
+            renameLocalVarName modName oldName newNameStr exp
         | otherwise = return exp
 --      renameInMatch (match :: GHC.Located (GHC.Match GHC.Name))
 --        | isDeclaredIn oldName match = renameLocalVarName modName oldName newNameStr match
 --        | otherwise = return match
       renameInDecl (decl :: GHC.Located (GHC.HsDecl GHC.Name))
-        | isDeclaredIn oldName decl = renameLocalVarName modName oldName newNameStr decl
+        | isDeclaredIn oldName decl =
+          renameLocalVarName modName oldName newNameStr decl
         | otherwise = return decl
         
       inExp :: (GHC.Located (GHC.HsExpr GHC.Name)) -> RefactGhc (GHC.Located (GHC.HsExpr GHC.Name))
@@ -168,7 +173,7 @@ renameLocalVarName modName oldName newNameStr t
           global = map (drop (modLength+1)) global'
           variables = d ++ global
       if newNameStr `elem` variables then 
-       error (newNameStr ++ " is already defined.") 
+       error (newNameStr ++ " is already defined.")
       else do 
        -- context-dependent operation
        newName <- mkNewGhcName newNameStr
