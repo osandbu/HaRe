@@ -52,12 +52,13 @@ comp fileName newName beginPos = do
        -- modInfo@((_, renamed, ast), toks) <- parseSourceFileGhc fileName
        modInfo@(t, toks) <- parseSourceFileGhc fileName
        let renamed = gfromJust "renamed" $ GHC.tm_renamed_source t
+       renamed2 <- GHC.tm_renamed_source t
        let name = locToName (GHC.mkFastString fileName) beginPos renamed
        let name' = eFromJust name ("There was no variable at " ++ (show beginPos))
        -- let expr = locToExp beginPos endPos renamed
 --       case expr of
 --         Just exp1@(GHC.L _ (GHC.HsIf _ _ _ _))
-       refactoredMod <- applyRefac (rename' name' newName) (Just modInfo ) fileName
+       (refactoredMod,_) <- applyRefac (rename' name' newName) (Just modInfo ) fileName
        return [refactoredMod]
 
 eFromJust :: Maybe a -> String -> a

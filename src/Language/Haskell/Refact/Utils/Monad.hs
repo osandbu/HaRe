@@ -1,5 +1,7 @@
 {-# LANGUAGE MultiParamTypeClasses #-}
 {-# LANGUAGE FlexibleInstances #-}
+{-# LANGUAGE ScopedTypeVariables #-}
+
 module Language.Haskell.Refact.Utils.Monad
        ( ParseResult
        -- , RefactResult
@@ -14,6 +16,8 @@ module Language.Haskell.Refact.Utils.Monad
        , RefactGhc
        , runRefactGhc
        , getRefacSettings
+       , defaultSettings
+       , logSettings
 
        {- ++AZ++ moved to MonadUtils, to break import cycle
        -- * Conveniences for state access
@@ -75,31 +79,40 @@ import qualified Data.Map as Map
 -- ---------------------------------------------------------------------
 
 data RefactSettings = RefSet
-        { rsetImportPath :: [FilePath]
+        { rsetImportPath :: ![FilePath]
+        -- , rsetLogFileName :: Maybe FilePath
+        , rsetLoggingOn :: !Bool
         } deriving (Show)
 
-data RefactStashId = Stash String deriving (Show,Eq,Ord)
+defaultSettings :: RefactSettings
+defaultSettings = RefSet ["."] False
+
+logSettings :: RefactSettings
+logSettings = defaultSettings { rsetLoggingOn = True }
+
+
+data RefactStashId = Stash !String deriving (Show,Eq,Ord)
 
 data RefactModule = RefMod
-        { rsTypecheckedMod :: GHC.TypecheckedModule
-        , rsOrigTokenStream :: [PosToken]  -- ^Original Token stream for the current module
-        , rsTokenCache :: TokenCache -- ^Token stream for the current module, maybe modified, in SrcSpan tree form
-        , rsStreamModified :: Bool     -- ^current module has updated the token stream
+        { rsTypecheckedMod  :: !GHC.TypecheckedModule
+        , rsOrigTokenStream :: ![PosToken]  -- ^Original Token stream for the current module
+        , rsTokenCache      :: !TokenCache  -- ^Token stream for the current module, maybe modified, in SrcSpan tree form
+        , rsStreamModified  :: !Bool        -- ^current module has updated the token stream
         }
 
 data RefactFlags = RefFlags
-       { rsDone :: Bool -- ^Current traversal has already made a change
+       { rsDone :: !Bool -- ^Current traversal has already made a change
        }
 
 -- | State for refactoring a single file. Holds/hides the token
 -- stream, which gets updated transparently at key points.
 data RefactState = RefSt
-        { rsSettings :: RefactSettings -- ^Session level settings
-        , rsUniqState :: Int -- ^ Current Unique creator value, incremented every time it is used
-        , rsFlags :: RefactFlags -- ^ Flags for controlling generic traversals
-        , rsStorage :: StateStorage -- ^Temporary storage of values
-                                    -- while refactoring takes place
-        , rsModule :: Maybe RefactModule -- ^The current module being refactored
+        { rsSettings  :: !RefactSettings -- ^Session level settings
+        , rsUniqState :: !Int -- ^ Current Unique creator value, incremented every time it is used
+        , rsFlags     :: !RefactFlags -- ^ Flags for controlling generic traversals
+        , rsStorage   :: !StateStorage -- ^Temporary storage of values
+                                      -- while refactoring takes place
+        , rsModule    :: !(Maybe RefactModule) -- ^The current module being refactored
         }
 
 -- |Result of parsing a Haskell source file. The first element in the
@@ -135,6 +148,7 @@ instance ExceptionMonad m => ExceptionMonad (StateT s m) where
     gblock = mapStateT gblock
     gunblock = mapStateT gunblock
 
+
 instance (MonadState RefactState (GHC.GhcT (StateT RefactState IO))) where
     get = lift get
     put = lift . put
@@ -143,33 +157,10 @@ instance (MonadState RefactState (GHC.GhcT (StateT RefactState IO))) where
 instance (MonadTrans GHC.GhcT) where
    lift = GHC.liftGhcT
 
--- instance MonadPlus RefactGhc where
-instance MonadPlus (GHC.GhcT (StateT RefactState IO)) where
-  mzero = undefined
-  mplus = undefined
+instance (MonadPlus m,Functor m,GHC.MonadIO m,ExceptionMonad m) => MonadPlus (GHC.GhcT m) where
+  mzero = GHC.GhcT $ \s -> mzero
+  x `mplus` y = GHC.GhcT $ \s -> (GHC.runGhcT (Just GHC.libdir) x) `mplus` (GHC.runGhcT (Just GHC.libdir) y)
 
-{-
-instance MonadPlus (RefactGhc a) where
-   mzero = RefactGhc (StateT(\ st -> mzero))
-
-   -- x `mplus` y =  RefactGhc (StateT ( \ st -> runRefact x st `mplus` runRefact y st))  
-   -- ^Try one of the refactorings, x or y, with the same state plugged in
--}
-
-{-
-instance (MonadPlus (GHC.GhcT (StateT RefactState IO))) where
-  mzero = lift mzero
-
-  -- For somewhereMStaged to work, the b leg should only be evaluated
-  -- if the a leg is mzero
-  mplus a b = do
-                a' <- a 
-                case a' of
-                  mzero -> do
-                            b'  <- b
-                            return b'
-                  _ -> return a'
--}
 
 runRefactGhc ::
   RefactGhc a -> RefactState -> IO (a, RefactState)

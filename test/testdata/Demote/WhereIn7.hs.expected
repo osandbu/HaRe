@@ -16,7 +16,6 @@ sumSquares x y = sq x + sq y
     
 
 
-
 anotherFun :: Int -> Int
 
 

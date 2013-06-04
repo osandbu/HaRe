@@ -9,7 +9,6 @@ sumSquares (x:xs) = sq   + sumSquares xs
     
 
 
-
 sumSquares [] = 0
 
 

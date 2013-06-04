@@ -33,7 +33,9 @@ import Language.Haskell.Refact.Utils.TypeUtils
 -- ---------------------------------------------------------------------
 
 main :: IO ()
-main = hspec spec
+main = do
+  setLogger
+  hspec spec
 
 spec :: Spec
 spec = do
@@ -390,7 +392,7 @@ spec = do
 
   describe "updateToks" $ do
     it "needs a test or two" $ do
-      pending "write this test"
+      pending -- "write this test"
 
   -- -------------------------------------------------------------------
 
@@ -776,13 +778,15 @@ spec = do
       (GHC.showRichTokenStream middle) `shouldBe` "\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n     ff = 15"
 
   -- -------------------------------------------------------------------
+{-
+  -- This has been moved into TypeUtils
 
   describe "addFormalParams" $ do
     it "adds new parameters to a token stream??" $ do
       let
         comp = do
 
-         (t, toks) <- parseSourceFileGhc "./test/testdata/DupDef/Dd1.hs"
+         (t, toks) <- parseSourceFileTest "./test/testdata/DupDef/Dd1.hs"
          putParsedModule t toks
          parentr <- getRefactRenamed
 
@@ -812,7 +816,7 @@ spec = do
                 "`- ((6,1),(32,18))\n"
       -- (showTree f) `shouldBe` ""
       (GHC.showRichTokenStream $ toksFromState s) `shouldBe` "module DupDef.Dd1 where\n\n toplevel :: Integer -> Integer\n toplevel x = c * x n1 n2\n\n c,d :: Integer\n c = 7\n d = 9\n\n -- Pattern bind\n tup :: (Int, Int)\n h :: Int\n t :: Int\n tup@(h,t) = head $ zip [1..10] [3..ff]\n   where\n     ff :: Int\n     ff = 15\n\n data D = A | B String | C\n\n ff y = y + zz\n   where\n     zz = 1\n\n l z =\n   let\n     ll = 34\n   in ll + z\n\n dd q = do\n   let ss = 5\n   return (ss + q)\n\n "
-
+-}
 
   -- -------------------------------------------------------------------
 
@@ -863,7 +867,7 @@ spec = do
 
   describe "lengthOfLastLine" $ do
     it "needs a test or two" $ do
-      pending "write this test"
+      pending -- "write this test"
 
   -- -------------------------------------------------------------------
 
@@ -1017,7 +1021,7 @@ spec = do
 
   describe "foo" $ do
     it "needs a test or two" $ do
-      pending "write this test"
+      pending -- "write this test"
 
 -- ---------------------------------------------------------------------
 -- Helper functions
@@ -1053,12 +1057,12 @@ parsedFileMGhc :: IO (ParseResult,[PosToken])
 parsedFileMGhc = parsedFileGhc "./test/testdata/M.hs"
 
 parseFileBGhc :: RefactGhc (ParseResult, [PosToken])
-parseFileBGhc = parseSourceFileGhc fileName
+parseFileBGhc = parseSourceFileTest fileName
   where
     fileName = "./test/testdata/B.hs"
 
 parseFileMGhc :: RefactGhc (ParseResult, [PosToken])
-parseFileMGhc = parseSourceFileGhc fileName
+parseFileMGhc = parseSourceFileTest fileName
   where
     fileName = "./test/testdata/M.hs"
 
@@ -1072,7 +1076,7 @@ parsedFileDd1Ghc = parsedFileGhc "./test/testdata/DupDef/Dd1.hs"
 comp :: RefactGhc String
 comp = do
     s <- get
-    modInfo@(t, toks) <- parseSourceFileGhc "./test/testdata/B.hs"
+    modInfo@(t, toks) <- parseSourceFileTest "./test/testdata/B.hs"
 
     g <- GHC.getModuleGraph
     gs <- mapM GHC.showModule g
