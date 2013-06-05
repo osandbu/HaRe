@@ -1,4 +1,4 @@
-module Language.Haskell.Refact.Rename(rename,t1) where
+module Language.Haskell.Refact.Rename(rename) where
 
 import qualified Data.Generics.Schemes as SYB
 import qualified Data.Generics.Aliases as SYB
@@ -35,10 +35,9 @@ import Language.Haskell.Refact.Utils.TokenUtils
 import Language.Haskell.Refact.Utils.TypeSyn
 import Language.Haskell.Refact.Utils.TypeUtils
 
-t1 = rename ["../old/refactorer/B.hs","4","7","4","43"]
+-- t1 = rename ["../old/refactorer/B.hs","4","7","4","43"]
 
--- TODO: This boilerplate will be moved to the coordinator, just the refac session will be exposed
-rename :: [String] -> IO () -- For now
+rename :: [String] -> IO ()
 rename args
   = do let fileName = args!!0
            newName = args!!1
@@ -53,17 +52,15 @@ comp fileName newName beginPos = do
        modInfo@(t, toks) <- parseSourceFileGhc fileName
        let renamed = gfromJust "renamed" $ GHC.tm_renamed_source t
        let name = locToName (GHC.mkFastString fileName) beginPos renamed
-       let name' = eFromJust name ("There was no variable at " ++ (show beginPos))
+       let name' = gfromJust ("There was no variable at " ++ (show beginPos)) name
        -- let expr = locToExp beginPos endPos renamed
 --       case expr of
 --         Just exp1@(GHC.L _ (GHC.HsIf _ _ _ _))
        refactoredMod <- applyRefac (rename' name' newName) (Just modInfo ) fileName
        return [refactoredMod]
 
-eFromJust :: Maybe a -> String -> a
-eFromJust (Just a) _ = a
-eFromJust Nothing errorMessage = error errorMessage
-
+-- performs error checking, 
+-- caveat: only works on variables, functions and arguments
 rename' :: (GHC.Located GHC.Name) -> String -> RefactGhc ()
 rename' (GHC.L _ name) newName =
   if isUpper (head newName) then error "Variables cannot start with an uppercase character" else do

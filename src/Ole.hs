@@ -38,3 +38,6 @@ wher x = x + a
 -- data declaration (7)
 data Foo = Bar Int
   deriving Show
+
+ident :: a -> a
+ident x = x

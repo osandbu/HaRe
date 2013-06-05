@@ -89,6 +89,7 @@ r4 = GhcRefacRename.rename ["./Ole.hs", "kkk", "30", "1"] -- pattern binding
 r5 = GhcRefacRename.rename ["./Ole.hs", "bob", "14", "15"] -- let
 r6 = GhcRefacRename.rename ["./Ole.hs", "a", "34", "1"] -- where clause
 r7 = GhcRefacRename.rename ["./Ole.hs", "FooBar", "39", "6"] -- data declaration
+r8 = GhcRefacRename.rename ["./Ole.hs", "b", "42", "10"] -- data declaration
 
 p1 = 
   do
