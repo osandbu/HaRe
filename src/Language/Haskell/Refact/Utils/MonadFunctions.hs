@@ -95,7 +95,7 @@ fetchToks :: RefactGhc [PosToken]
 fetchToks = do
   Just tm <- gets rsModule
   let toks = retrieveTokens $ (tkCache $ rsTokenCache tm) Map.! mainTid
-  liftIO $ putStrLn $ "fetchToks" ++ (showToks toks)
+  --liftIO $ putStrLn $ "fetchToks" ++ (showToks toks)
   return toks
 
 -- |fetch the pristine token stream
@@ -130,7 +130,7 @@ getToksForSpan sspan = do
   let tk' = replaceTreeInCache sspan forest' $ rsTokenCache tm
   let rsModule' = Just (tm {rsTokenCache = tk'})
   put $ st { rsModule = rsModule' }
-  liftIO $ putStrLn $ "getToksForSpan " ++ (GHC.showPpr sspan) ++ ":" ++ (show (ghcSpanStartEnd sspan,toks))
+  --liftIO $ putStrLn $ "getToksForSpan " ++ (GHC.showPpr sspan) ++ ":" ++ (show (ghcSpanStartEnd sspan,toks))
   return toks
 
 -- |Get the current tokens preceding a given GHC.SrcSpan.
@@ -166,7 +166,7 @@ stash oldTree = do
 -- delimiting new tokens
 putToksForSpan ::  GHC.SrcSpan -> [PosToken] -> RefactGhc GHC.SrcSpan
 putToksForSpan sspan toks = do
-  liftIO $ putStrLn $ "putToksForSpan " ++ (GHC.showPpr sspan) ++ ":" ++ (show toks)
+--  liftIO $ putStrLn $ "putToksForSpan " ++ (GHC.showPpr sspan) ++ ":" ++ (show toks)
   st <- get
   let Just tm = rsModule st
 

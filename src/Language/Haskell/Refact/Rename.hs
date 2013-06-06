@@ -88,12 +88,13 @@ reallyRename rs modName oldName newNameStr = do
       renameInGroup (group::GHC.HsGroup GHC.Name) 
         | isDeclaredIn oldName group = do
           GHC.trace "renameInGroup" $ renameTopLevelVarName modName oldName newNameStr group rs
-        | otherwise = error "OTHERWISE"--return mod
+        | otherwise = return group
       -- If the name is declared in a pattern
 --      renameInPattern (pat::GHC.Located (GHC.HsBind GHC.Name))
 --        | isDeclaredIn oldName pat = renameLocalVarName modName oldName newNameStr pat
 --        | otherwise = return pat
       -- If the name is declared in an expression
+      
       renameInExp (exp::GHC.Located (GHC.HsExpr GHC.Name))
         | isDeclaredIn oldName exp =
             renameLocalVarName modName oldName newNameStr exp
@@ -101,6 +102,7 @@ reallyRename rs modName oldName newNameStr = do
 --      renameInMatch (match :: GHC.Located (GHC.Match GHC.Name))
 --        | isDeclaredIn oldName match = renameLocalVarName modName oldName newNameStr match
 --        | otherwise = return match
+
       renameInDecl (decl :: GHC.Located (GHC.HsDecl GHC.Name))
         | isDeclaredIn oldName decl =
           renameLocalVarName modName oldName newNameStr decl
@@ -172,6 +174,7 @@ renameLocalVarName modName oldName newNameStr t
           global' = filter (\x -> take (modLength+1) x == modName ++ ".") global''
           global = map (drop (modLength+1)) global'
           variables = d ++ global
+      liftIO $ putStrLn $ "local: " ++ show variables
       if newNameStr `elem` variables then 
        error (newNameStr ++ " is already defined.")
       else do 
@@ -179,21 +182,26 @@ renameLocalVarName modName oldName newNameStr t
        newName <- mkNewGhcName newNameStr
        renamePN oldName newName True t
 
-renameTopLevelVarName modName oldName newNameStr t rs = do
-  -- filter out patterns, left with qualified, remove qualified names
-  let (f, d') = hsFreeAndDeclaredNames t
-  let modLength = length modName
-      -- filter out names that start with modName followed by a period (i.e. "Ole.")
-      d = filter (\x -> take (modLength+1) x /= modName ++ ".") d'
-      global'' = hsVisibleNames t rs
-      global' = filter (\x -> take (modLength+1) x == modName ++ ".") global''
-      global = map (drop (modLength+1)) global'
-      variables = d ++ global
-  if newNameStr `elem` variables then 
-    error (newNameStr ++ " is already defined.") 
-  else do 
-    newName <- mkNewGhcName newNameStr
-    renamePN oldName newName True t
+renameTopLevelVarName modName oldName newNameStr t rs
+  = do
+      -- filter out patterns, left with qualified, remove qualified names
+      let (f, d') = hsFreeAndDeclaredNames t
+      let modLength = length modName
+          -- filter out names that start with modName followed by a period (i.e. "Ole.")
+          topLevel' = filter (\x -> take (modLength+1) x == modName ++ ".") d'
+          topLevel = map (drop (modLength+1)) topLevel'
+          local = hsVisibleNames oldName t
+          variables = topLevel ++ local
+      liftIO $ putStrLn $ "topLevel d': " ++ show d'
+      liftIO $ putStrLn $ "topLevel topLevel': " ++ show topLevel'
+      liftIO $ putStrLn $ "topLevel topLevel: " ++ show topLevel
+      liftIO $ putStrLn $ "topLevel local: " ++ show local
+      liftIO $ putStrLn $ "topLevel variables: " ++ show variables
+      if newNameStr `elem` variables then 
+        error (newNameStr ++ " is already defined.") 
+      else do 
+        newName <- mkNewGhcName (modName ++ "." ++ newNameStr)
+        renamePN oldName newName True t
 
 prettyprint2 :: (GHC.Outputable a) => a -> String
 prettyprint2 x = GHC.showSDoc $ GHC.ppr x
